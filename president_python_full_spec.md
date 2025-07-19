@@ -1,12 +1,12 @@
 # Multiplayer President (Custom Variant) – Python Implementation & Cursor Rules
 
-**Status:** Authoritative single-source specification for implementing the custom President card game variant entirely with a **Python engine** plus a lightweight web client deployed on **Vercel**, with realtime served by a persistent Python service (Fly.io / Railway / Render). Use this document for all development, code generation (Cursor), reviews, and onboarding.
+**Status:** Authoritative single-source specification for implementing the custom President card game variant entirely with a **Python engine** plus a lightweight web client deployed on **Vercel**, with realtime served by a persistent Python service. Use this document for all development, code generation (Cursor), reviews, and onboarding. 
 
 ---
 
 ## 1. Vision & Objectives
 
-1. Fast, fair, deterministic online play of a customised President (a.k.a. Asshole) variant for **2–5 players (max 5)** with optional bots. Optimal player count: 4–5.
+1. Fast, fair, deterministic online play of a customised President (a.k.a. Asshole) variant for **3–5 players (max 5)** with optional bots. Optimal player count: 4–5.
 2. Python engine containing *all* game logic, easily unit testable and framework agnostic.
 3. Browser client (Next.js or static React) on Vercel consuming a websocket API directly from Python service.
 4. Pluggable rule config but **defaults = custom rules in Section 4**.
@@ -21,10 +21,10 @@
 Browser (React/Next.js on Vercel)
         |  (WSS JSON protocol)
         v
-Persistent Python Service (FastAPI / Starlette + WebSocket, asyncio)
-        |  (Redis JSON state, optional)
+Koyeb Web Service (FastAPI + WebSocket)
+        |  (Optional: Redis for persistence)
         v
-   Redis (Upstash) – persistence / recovery
+   Upstash Redis (Serverless Redis)
 ```
 
 **Why hybrid:** Vercel cannot host long‑lived Python websocket processes. The Python engine runs elsewhere (Fly.io recommended). Vercel hosts static assets + minimal UI only.
@@ -43,7 +43,7 @@ Finish order after a round assigns titles:
 | (n-1)           | Scumbag        | Gives 1 best card to Vice President, receives 1 chosen by Vice President                             |
 | n               | Asshole        | Gives 2 best cards to President, receives 2 chosen by President                                      |
 
-If **≤3 players**: Roles simplified (President, Asshole; no Vice roles). If **4 players**: President, Vice President, Scumbag, Asshole (no Citizens). If **5 players**: All roles as table above with exactly one Citizen.
+If **3 players**: Roles simplified (President, Vice President, Asshole; no Scumbag). If **4 players**: President, Vice President, Scumbag, Asshole (no Citizens). If **5 players**: All roles as table above with exactly one Citizen.
 
 **Best card = highest rank under *****normal***** ordering** (even if inversion occurred during prior round, exchanges at new round start always consider default ordering).
 
@@ -90,20 +90,20 @@ Triggered when a legal play of a pattern whose rank matches below is resolved.
 | Rank (pattern) | Effect Name    | Effect Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | -------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 7 (x sevens)   | Seven Gift     | Current player must immediately **gift x cards total to other players**. "x" equals the number of 7s just played. They may split these gifted cards across any opponents (bots or humans) in any distribution summing to x. Gifted cards are selected from *their hand after removing the played 7s*. Recipients add gifted cards to hand. Turn then proceeds to next player (no additional play by current player).                                                                                                                                                                                                                                                                                                                                                                                                |
-| 8 (x eights)   | Eight Reset    | Pile is cleared (discard current trick). The player who played the 8s **immediately starts a new trick**, may lead any legal pattern from remaining hand (cannot reuse the just‑played 8s).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 10 (x tens)    | Ten Discard    | Player must **discard x additional cards** (of any ranks) face down into discard pile (not visible). Those cards leave the game for this round. (If hand has < x cards, discard all remaining.) Turn then ends; next player continues over a cleared pile (new trick started by next player).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| J (x jacks)    | Jack Inversion | Immediately **invert rank ordering** for the remainder of the *current trick cycle* until the trick ends (i.e., until a reset by Eight or trick completion by passes). During inversion: ordering becomes reversed: `JOKER,2,A,K,...,4,3` descending considered lowest→highest reversed. **Additional Rule:** After inversion begins, the *next player may only play ranks strictly lower than Jack under normal ordering*, i.e. in inverted ordering they must play a card that would have been *lower* pre-inversion. Practical simplification: After a Jack play, only lower pre-Jack ranks are legal (10 downward). **If a 3 is played while inversion is active and all other players pass**, the round ends (accelerated termination). After the trick ends (normal completion), ordering reverts to default. |
+| 8 (x eights)   | Eight Reset    | Pile is cleared (discard current round). The player who played the 8s **immediately starts a new round**, the current pile is discarded the and round starts again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 10 (x tens)    | Ten Discard    | Player must **discard x additional cards** (of any ranks) face down into discard pile (not visible). Those cards leave the game for the entirety of the game. (If hand has < x cards, discard all remaining.) Turn then ends; next player continues over a cleared pile (new round started by next player).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| J (x jacks)    | Jack Inversion | Immediately **invert rank ordering** for the remainder of the *current round cycle* until the round ends (i.e., until a reset by Eight or round completion by passes). During inversion: ordering becomes reversed: `JACK,10,9,8,...,4,3` descending considered lowest→highest reversed. **Additional Rule:** After inversion begins, the *next player may only play ranks strictly lower than Jack under normal ordering*, i.e. in inverted ordering they must play a card that would have been *lower* pre-inversion. Practical simplification: After a Jack play, only lower pre-Jack ranks are legal (10 downward). **If a 3 is played while inversion is active and all other players pass**, the round ends (accelerated termination). After the round ends (normal completion), ordering reverts to default. |
 
 Clarifications:
 
-- Effects stack only sequentially; an Eight reset clears inversion if active (since trick ended).
+- Effects stack only sequentially; an Eight reset clears inversion if active (since round ended).
 - Seven Gift & Ten Discard actions are *mandatory* auxiliary phases and must complete before advancing turn.
 
-### 4.6 Passing & Trick End
+### 4.6 Passing & Round End
 
 - A player may pass instead of playing a higher pattern.
-- Trick ends when all *active* players except the last one to have played have passed consecutively.
-- After trick end (or Eight Reset), last successful player leads new trick (unless effect states otherwise).
+- Round ends when all *active* players except the last one to have played have passed consecutively.
+- After round end (or Eight Reset), last successful player leads new round (unless effect states otherwise).
 
 ### 4.7 Round End
 
@@ -119,14 +119,13 @@ Order of operations:
 3. **Asshole -> President:** Asshole automatically selects (highest rank) top 2 cards; these transfer. President chooses any 2 cards from their *current* hand to return.
 4. **Scumbag -> Vice President:** Scumbag automatically gives highest single card; Vice President chooses any 1 card to return.
 5. Citizens skip.
-6. Start round: Player with 3♦ leads as per Opening Play. (If 3♦ traded during exchange, still opening anchor is whoever **currently holds** it.)
+6. Start round: On the very first game in the session, the player with 3♦ leads as per Opening Play. (If 3♦ traded during exchange, still opening anchor is whoever **currently holds** it.). For all subsequent games, the Asshole begins the round.
 
 Edge cases: If players have fewer cards than required to give (rare with standard deck unless altered future variants) they give all available.
 
 ### 4.9 Jokers
 
-- If `use_jokers = true`, Jokers are highest rank unless inversion active (then they become lowest logically for comparison). Jokers are treated as their own rank `JOKER`.
-- Jokers count toward set sizes only if playing a pure Joker set (cannot combine with other ranks).
+- If `use_jokers = true`, Jokers are treated as any other rank. So a Joker is higher than a 2 in rank order (for the Scumbag and Asshole to give to the Vice President and President respectively), but can be used as any value in a set. For example, a Joker can be used as a 3, 4, 5, 6, 7, 8, 9, 10, Jack, Queen, King, or Ace. So a player can play 2, Joker (which equates to a pair of 2s) on top of a Ace pair and win the round. The same applies to any other value. A Joker can also be played individually as a single card with any other rank. So a player can play a Joker pair or 2,Joker together on top of an Ace pair (where its value is higher than the Ace, therefore 2) and win the round.
 
 ### 4.10 Invalid Plays
 
@@ -239,11 +238,11 @@ from pydantic import BaseModel, Field
 class RuleConfig(BaseModel):
     use_jokers: bool = True
     max_players: int = 5
-    min_players: int = 2
+    min_players: int = 3
     enable_bots: bool = True
 ```
 
-(Default covers custom variant; additional toggles can be added later.) Enforce `2 <= min_players <= max_players <= 5`.
+(Default covers custom variant; additional toggles can be added later.) Enforce `3 <= min_players <= max_players <= 5`.
 
 ---
 
@@ -272,8 +271,8 @@ Responsibilities:
 1. Confirm player owns all proposed cards.
 2. Uniform rank (except pure Joker set).
 3. Determine `count` and `rank`.
-4. If starting new trick (no current\_rank): auto-accept.
-5. Else require same `count` and strictly higher rank (respect inversion) **unless** inversion rules after Jack apply (only lower pre-Jack ranks allowed). Maintain flag capturing if inversion active *within* same trick.
+4. If starting new round (no current\_rank): auto-accept.
+5. Else require same `count` and strictly higher rank (respect inversion) **unless** inversion rules after Jack apply (only lower pre-Jack ranks allowed). Maintain flag capturing if inversion active *within* same round.
 6. Apply special effect classification if rank ∈ {7,8,10,'J'}.
 7. Return structured result:
 
@@ -296,7 +295,7 @@ Each effect function mutates a cloned state or returns a delta object for `engin
 - `apply_seven_gift(state, player_id, count)` sets `pending_gift = {'remaining': count, 'player_id': player_id}`. Client then sends `gift_select` events distributing cards (server validates total).
 - `apply_eight_reset(state, player_id)` clears pile (current\_rank/count null), same player retains turn.
 - `apply_ten_discard(state, player_id, count)` sets `pending_discard = {'remaining': count, 'player_id': player_id}`. Client chooses discard cards; remove silently.
-- `apply_jack_inversion(state)` sets `inversion_active = True` until trick end or Eight reset.
+- `apply_jack_inversion(state)` sets `inversion_active = True` until round end or Eight reset.
 
 ---
 
@@ -311,8 +310,8 @@ Each effect function mutates a cloned state or returns a delta object for `engin
 Pure functions (except timestamp):
 
 - `start_round(state, seed=None)` → shuffles, deals, assigns opening turn (player with 3♦) sets phase `play` after optional exchange.
-- `play_cards(state, player_id, card_ids)` → validate, apply pattern, queue effect or trick progression.
-- `pass_turn(state, player_id)` → mark passed; if trick end conditions met: reset trick & assign new leader; clear inversion flag.
+- `play_cards(state, player_id, card_ids)` → validate, apply pattern, queue effect or round progression.
+- `pass_turn(state, player_id)` → mark passed; if round end conditions met: reset round & assign new leader; clear inversion flag.
 - `submit_gift_distribution(state, player_id, assignments)` → validate counts, transfer cards, clear pending.
 - `submit_discard_selection(state, player_id, cards)` → remove & clear pending; clear rank if pile emptied.
 - `check_round_end(state)` → if player empties reduce active count, set finished\_order when complete, assign roles (`ranking.py`).
@@ -405,8 +404,8 @@ Use `pytest` + `hypothesis` (optional) for property tests. **Required tests:**
 3. Seven Gift distribution enforce correct totals.
 4. Eight Reset gives same player next lead.
 5. Ten Discard removes correct number & cannot exceed hand size.
-6. Jack Inversion flips ordering & reverts after trick end.
-7. Inversion early termination when 3 ends inverted trick.
+6. Jack Inversion flips ordering & reverts after round end.
+7. Inversion early termination when 3 ends inverted round.
 8. Round role assignment for 3,4,5 player counts.
 9. Exchange transfers correct highest cards.
 10. President / Vice return correct card counts.
@@ -466,8 +465,8 @@ CI simulation: Run 500 games with a mix of bots/humans (mock) verifying no crash
 
 - Total distinct card ids across all player hands + discard + (pile being considered) == 52 (+2 Jokers if enabled).
 - No negative card counts.
-- A player's `passed` resets after trick end.
-- `inversion_active` false outside an active trick.
+- A player's `passed` resets after round end.
+- `inversion_active` false outside an active round.
 - `pending_gift` and `pending_discard` mutually exclusive & only during `play` phase.
 
 ---
@@ -529,7 +528,7 @@ alwaysApply: true
 1. Implement models, rules, comparator, shuffle.
 2. Engine: join room, add players, deal, start round, opening lead.
 3. Validate singles only; add multi-card sets.
-4. Implement pass logic and trick termination.
+4. Implement pass logic and round termination.
 5. Add special effects progressively (7,8,10,J).
 6. Add role assignment & round end detection; exchange phase.
 7. Add bots (greedy baseline).
@@ -597,4 +596,333 @@ Before merging:
 This single markdown file encapsulates **all** required specifications: custom rules, Python architecture, websocket protocol, bots, testing, deployment, and integrated Cursor rules. Treat deviations as changes requiring explicit review. Begin with core engine purity, then layer effects, then protocol & UI. Maintain deterministic, well-tested logic to ensure long-term stability.
 
 Happy building – proceed to scaffold the Python engine now.
+
+## Validation & Architectural Improvements for Koyeb Deployment
+
+After reviewing your comprehensive President game specification, I can provide validation and specific improvements for deploying on Koyeb's free tier.
+
+### ✅ **Current Architecture Validation**
+
+The specification is well-structured with several strengths:
+- **Separation of concerns**: Python engine + lightweight web client
+- **Framework-agnostic engine**: Pure game logic separate from transport
+- **Comprehensive rule specification**: Custom variant clearly defined
+- **Testing strategy**: Good coverage of edge cases and invariants
+
+### 🚀 **Improved Architecture for Koyeb**
+
+Here's an enhanced architecture specifically optimized for Koyeb:
+
+```
+Browser (React/Next.js on Vercel)
+        |  (WSS JSON protocol)
+        v
+Koyeb Web Service (FastAPI + WebSocket)
+        |  (Optional: Redis for persistence)
+        v
+   Upstash Redis (Serverless Redis)
+```
+
+### **Key Improvements for Koyeb Deployment**
+
+#### 1. **Leverage Koyeb's Autoscaling**
+```python
+# In ws/server.py - Enhanced for Koyeb
+import os
+import signal
+import asyncio
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="President Game Engine")
+
+# Add CORS for Vercel frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://*.vercel.app", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+async def main():
+    port = int(os.environ.get("PORT", "8000"))
+    # Koyeb provides PORT env variable
+    
+    # Health check endpoint for Koyeb
+    @app.get("/health")
+    async def health_check():
+        return {"status": "healthy", "version": "1.0.0"}
+    
+    # Graceful shutdown for Koyeb's SIGTERM
+    def signal_handler():
+        print("Received shutdown signal")
+        # Clean up active games, notify clients
+        
+    signal.signal(signal.SIGTERM, lambda s, f: signal_handler())
+    
+    config = uvicorn.Config(
+        app, 
+        host="0.0.0.0", 
+        port=port,
+        access_log=True,
+        log_level="info"
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
+```
+
+#### 2. **Enhanced State Management with Persistence**
+```python
+# In storage/koyeb_store.py
+from typing import Optional
+import os
+import json
+import redis.asyncio as redis
+
+class KoyebStateStore:
+    def __init__(self):
+        # Use Upstash Redis for persistence
+        redis_url = os.environ.get("REDIS_URL")
+        self.redis = redis.from_url(redis_url) if redis_url else None
+        self.memory_store = {}  # Fallback to memory
+        
+    async def save_room(self, room_id: str, state: RoomState):
+        serialized = self._serialize_state(state)
+        
+        if self.redis:
+            await self.redis.setex(
+                f"room:{room_id}", 
+                3600,  # 1 hour TTL
+                serialized
+            )
+        else:
+            self.memory_store[room_id] = serialized
+            
+    async def load_room(self, room_id: str) -> Optional[RoomState]:
+        if self.redis:
+            data = await self.redis.get(f"room:{room_id}")
+        else:
+            data = self.memory_store.get(room_id)
+            
+        return self._deserialize_state(data) if data else None
+        
+    async def cleanup_expired(self):
+        """Koyeb autoscaling cleanup"""
+        if not self.redis:
+            # Clean memory store
+            current_time = time.time()
+            expired = [
+                k for k, v in self.memory_store.items() 
+                if current_time - v.get('last_activity', 0) > 3600
+            ]
+            for key in expired:
+                del self.memory_store[key]
+```
+
+#### 3. **Optimized Deployment Configuration**
+
+**Dockerfile** (optimized for Koyeb):
+```dockerfile
+FROM python:3.12-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create non-root user for security
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Expose port (Koyeb will override with PORT env var)
+EXPOSE 8000
+
+# Run the application
+CMD ["python", "-m", "president_engine.ws.server"]
+```
+
+**requirements.txt**:
+```
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+websockets==12.0
+pydantic==2.5.0
+redis[hiredis]==5.0.1
+orjson==3.9.10
+python-multipart==0.0.6
+```
+
+#### 4. **Environment-Based Configuration**
+```python
+# In config.py
+import os
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    # Koyeb provides these automatically
+    port: int = int(os.environ.get("PORT", "8000"))
+    host: str = "0.0.0.0"
+    
+    # Optional Redis for persistence
+    redis_url: str = os.environ.get("REDIS_URL", "")
+    
+    # CORS settings for Vercel
+    allowed_origins: list[str] = [
+        "https://*.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:8000"
+    ]
+    
+    # Game settings
+    max_rooms: int = int(os.environ.get("MAX_ROOMS", "1000"))
+    room_ttl: int = int(os.environ.get("ROOM_TTL", "3600"))
+    
+    # Logging
+    log_level: str = os.environ.get("LOG_LEVEL", "info")
+    
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
+```
+
+#### 5. **Koyeb-Specific Deployment Files**
+
+**koyeb.yaml** (Infrastructure as Code):
+```yaml
+services:
+  - name: president-engine
+    git:
+      repository: github.com/yourusername/president-engine
+      branch: main
+    build:
+      buildpack: docker
+    instance:
+      type: free
+    ports:
+      - port: 8000
+        protocol: http
+    health_checks:
+      - path: /health
+        port: 8000
+        protocol: http
+    scaling:
+      min: 0  # Scale to zero when not in use
+      max: 1  # Free tier limit
+    env:
+      - name: LOG_LEVEL
+        value: info
+      - name: MAX_ROOMS
+        value: "500"
+      # Add REDIS_URL as secret if using persistence
+```
+
+#### 6. **Enhanced WebSocket Handler with Connection Management**
+```python
+# In ws/server.py
+import asyncio
+from collections import defaultdict
+from fastapi import WebSocket, WebSocketDisconnect
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[str, set[WebSocket]] = defaultdict(set)
+        self.connection_rooms: dict[WebSocket, str] = {}
+        
+    async def connect(self, websocket: WebSocket, room_id: str):
+        await websocket.accept()
+        self.active_connections[room_id].add(websocket)
+        self.connection_rooms[websocket] = room_id
+        
+    def disconnect(self, websocket: WebSocket):
+        room_id = self.connection_rooms.pop(websocket, None)
+        if room_id:
+            self.active_connections[room_id].discard(websocket)
+            if not self.active_connections[room_id]:
+                del self.active_connections[room_id]
+                
+    async def broadcast_to_room(self, room_id: str, message: str):
+        connections = self.active_connections.get(room_id, set()).copy()
+        if connections:
+            await asyncio.gather(
+                *[self._send_safe(conn, message) for conn in connections],
+                return_exceptions=True
+            )
+            
+    async def _send_safe(self, websocket: WebSocket, message: str):
+        try:
+            await websocket.send_text(message)
+        except:
+            # Connection closed, clean up
+            self.disconnect(websocket)
+
+manager = ConnectionManager()
+
+@app.websocket("/ws/{room_id}")
+async def websocket_endpoint(websocket: WebSocket, room_id: str):
+    await manager.connect(websocket, room_id)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await handle_message(room_id, websocket, data)
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        # Handle player disconnect logic
+        await handle_player_disconnect(room_id, websocket)
+```
+
+### **Deployment Advantages with Koyeb**
+
+1. **Cost Efficiency**: Free tier supports your use case perfectly
+2. **Zero Configuration**: Built-in HTTPS, global CDN, autoscaling
+3. **Scale to Zero**: No costs when not in use
+4. **Fast Cold Starts**: Typically <1s boot time
+5. **Global Edge**: Reduced latency worldwide
+6. **Built-in Monitoring**: Logs, metrics, and alerts included
+
+### **Recommended Deployment Steps**
+
+1. **Prepare Repository**:
+   ```bash
+   git init
+   git add .
+   git commit -m "Initial President game implementation"
+   git push origin main
+   ```
+
+2. **Deploy to Koyeb**:
+   - Connect GitHub repository
+   - Set run command: `python -m president_engine.ws.server`
+   - Configure health check: `/health`
+   - Enable autoscaling (0-1 instances for free tier)
+
+3. **Configure Frontend** (Vercel):
+   ```env
+   NEXT_PUBLIC_WS_URL=wss://your-app.koyeb.app
+   ```
+
+### **Production Readiness Enhancements**
+
+- **Rate Limiting**: Built into Koyeb
+- **Monitoring**: Use Koyeb's built-in metrics
+- **Logging**: Structured JSON logs for better debugging
+- **Error Tracking**: Integration with Sentry/monitoring services
+- **Performance**: Connection pooling and efficient JSON serialization
+
+This architecture leverages Koyeb's strengths while maintaining your game's requirements. The autoscaling ensures cost-effectiveness, while the global edge network provides excellent performance for your multiplayer game.
 
