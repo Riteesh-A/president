@@ -491,22 +491,23 @@ class PresidentEngine:
         for p in room.players.values():
             if p.id not in room.finished_order and p.hand:
                 room.finished_order.append(p.id)
-        roles = ['President','Vice President','Citizen','Scumbag','Asshole']
         n = len(room.players)
-        if n == 3: 
-            roles = ['President','Vice President','Asshole']
-        elif n == 4: 
-            roles = ['President','Vice President','Scumbag','Asshole']
+        if n == 3:
+            roles = ['President', 'Vice President', 'Asshole']
+        elif n == 4:
+            roles = ['President', 'Vice President', 'Scumbag', 'Asshole']
         else:  # 5 players
-            roles = ['President','Vice President','Citizen','Scumbag','Asshole']
+            roles = ['President', 'Vice President', 'Citizen', 'Scumbag', 'Asshole']
         for i, pid in enumerate(room.finished_order):
-            if i < len(roles): room.players[pid].role = roles[i]
+            if i < len(roles):
+                room.players[pid].role = roles[i]
+            else:
+                room.players[pid].role = None
         room.phase = 'finished'
         room.game_log.append("Game finished!")
         for i, pid in enumerate(room.finished_order):
             p = room.players[pid]
             room.game_log.append(f"{i+1}. {p.name} - {p.role}")
-        # Set first_game to False after first game ends
         room.first_game = False
 
     def _format_card(self, card_id: str) -> str:
@@ -1327,6 +1328,128 @@ def update_gift_total(gift_values, rid, pid):
         return html.Div(f"❌ Too many: {total_gifting}/{required} cards", className='text-danger small fw-bold')
     else:
         return html.Div(f"⏳ Need {required - total_gifting} more cards", className='text-warning small fw-bold')
+
+def assign_roles_dynamic(room):
+    n = len(room.players)
+    if n == 3:
+        roles = ['President', 'Vice President', 'Asshole']
+    elif n == 4:
+        roles = ['President', 'Vice President', 'Scumbag', 'Asshole']
+    else:
+        roles = ['President', 'Vice President', 'Citizen', 'Scumbag', 'Asshole']
+    for i, pid in enumerate(room.finished_order):
+        if i < len(roles):
+            room.players[pid].role = roles[i]
+        else:
+            room.players[pid].role = None
+    # For players still in the game, clear their role until they finish
+    for pid, p in room.players.items():
+        if pid not in room.finished_order:
+            p.role = None
+
+# Patch play_cards to assign roles as soon as a player finishes
+old_play_cards = PresidentEngine.play_cards
+def play_cards(self, room_id: str, player_id: str, card_ids: List[str]) -> Tuple[bool, str]:
+    with self.room_locks[room_id]:
+        room = self.get_room(room_id)
+        valid, message, pattern = self.validate_play(room, player_id, card_ids)
+        if not valid:
+            return False, message
+        if getattr(room, 'first_game', True) and not getattr(room, 'first_game_first_play_done', False) and room.current_rank is None:
+            room.first_game_first_play_done = True
+        player = room.players[player_id]
+        for card_id in card_ids:
+            player.hand.remove(card_id)
+        player.hand_count = len(player.hand)
+        room.current_pile = card_ids.copy()
+        room.round_history.append({
+            'player_name': player.name,
+            'cards': card_ids.copy(),
+            'rank': pattern['rank'],
+            'count': pattern['count']
+        })
+        room.current_rank = pattern['rank']
+        room.current_count = pattern['count']
+        room.last_play = {'player_id': player_id, 'player_name': player.name, 'cards': card_ids, 'rank': pattern['rank'], 'count': pattern['count']}
+        for p in room.players.values(): p.passed = False
+        auto_win = False
+        if not room.inversion_active and (pattern['rank'] == 2 or pattern['rank'] == 'JOKER'):
+            auto_win = True
+            room.game_log.append(f"{player.name} played {pattern['rank']} - automatic round win!")
+        elif room.inversion_active and pattern['rank'] == 3:
+            auto_win = True
+            room.game_log.append(f"{player.name} played 3 during inversion - automatic round win!")
+        if auto_win:
+            self._save_completed_round(room, f"Auto-win ({pattern['rank']})")
+            room.discard.extend(room.current_pile)
+            room.current_pile = []
+            room.round_history = []
+            room.current_rank = None
+            room.current_count = None
+            room.inversion_active = False
+            for p in room.players.values(): p.passed = False
+            room.version += 1
+            room.game_log.append(f"{player.name} starts new round after auto-win")
+            room.last_round_winner = player_id
+            return True, "Auto-win! New round started"
+        effect_applied = False
+        if pattern['effect']:
+            effect_applied = self._apply_effect(room, player_id, pattern['effect'], pattern['count'])
+        if len(player.hand) == 0:
+            if player_id not in room.finished_order:
+                room.finished_order.append(player_id)
+                room.game_log.append(f"{player.name} finished in position {len(room.finished_order)}!")
+                assign_roles_dynamic(room)
+            self._check_game_end(room)
+        if not effect_applied or pattern['effect'] == 'eight_reset':
+            if pattern['effect'] == 'eight_reset':
+                self._save_completed_round(room, "Eight reset")
+                room.discard.extend(room.current_pile)
+                room.current_pile = []
+                room.round_history = []
+                room.current_rank = None
+                room.current_count = None
+                room.inversion_active = False
+                room.game_log.append(f"{player.name} played {pattern['count']} 8s - pile cleared!")
+                room.last_round_winner = player_id
+            else:
+                self._advance_turn(room)
+        room.version += 1
+        room.game_log.append(f"{player.name} played: {', '.join([self._format_card(c) for c in card_ids])}")
+        return True, "Cards played successfully"
+PresidentEngine.play_cards = play_cards
+
+# Patch pass_turn to assign roles as soon as a player finishes
+old_pass_turn = PresidentEngine.pass_turn
+def pass_turn(self, room_id: str, player_id: str) -> Tuple[bool, str]:
+    with self.room_locks[room_id]:
+        room = self.get_room(room_id)
+        if not room: return False, "Room not found"
+        if room.turn != player_id: return False, "Not your turn"
+        player = room.players[player_id]
+        player.passed = True
+        room.game_log.append(f"{player.name} passed")
+        active = [p for p in room.players.values() if p.hand and not p.passed]
+        if len(active) <= 1:
+            self._save_completed_round(room, "All players passed")
+            room.discard.extend(room.current_pile)
+            room.current_pile = []
+            room.round_history = []
+            room.current_rank = None
+            room.current_count = None
+            room.inversion_active = False
+            if room.last_play:
+                room.turn = room.last_play['player_id']
+                room.game_log.append(f"{room.players[room.turn].name} starts new round")
+                room.last_round_winner = room.last_play['player_id']
+            for p in room.players.values(): p.passed = False
+            # Assign roles in case the last player finished by passing
+            assign_roles_dynamic(room)
+        else:
+            self._advance_turn(room)
+        room.version += 1
+        return True, "Passed"
+PresidentEngine.pass_turn = pass_turn
 
 # ===================== RUN SERVER =====================
 if __name__=='__main__':
