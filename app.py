@@ -265,6 +265,20 @@ class PresidentEngine:
             return False
         return False
 
+    def _advance_turn_if_no_pending(self, room: RoomState):
+        """Only advance turn if no pending effects"""
+        if not room.pending_gift and not room.pending_discard:
+            self._advance_turn(room)
+
+    def _advance_turn(self, room: RoomState):
+        players = sorted(room.players.values(), key=lambda p: p.seat)
+        idx = next(i for i,p in enumerate(players) if p.id == room.turn)
+        for i in range(1, len(players)):
+            nxt = players[(idx + i) % len(players)]
+            if nxt.hand and not nxt.passed:
+                room.turn = nxt.id
+                return
+
     def pass_turn(self, room_id: str, player_id: str) -> Tuple[bool, str]:
         with self.room_locks[room_id]:
             room = self.get_room(room_id)
@@ -289,15 +303,6 @@ class PresidentEngine:
                 self._advance_turn(room)
             room.version += 1
             return True, "Passed"
-
-    def _advance_turn(self, room: RoomState):
-        players = sorted(room.players.values(), key=lambda p: p.seat)
-        idx = next(i for i,p in enumerate(players) if p.id == room.turn)
-        for i in range(1, len(players)):
-            nxt = players[(idx + i) % len(players)]
-            if nxt.hand and not nxt.passed:
-                room.turn = nxt.id
-                return
 
     def _end_game(self, room: RoomState):
         for p in room.players.values():
@@ -343,33 +348,33 @@ def create_card_element(card_id: str, size='normal', selectable=False, selected=
         suit_symbol = suit_symbols.get(suit, '')
         color_class = 'red' if suit in ['H', 'D'] else 'black'
     
-    # Size classes
-    size_class = {
-        'small': 'card-small',
-        'normal': 'card-normal', 
-        'large': 'card-large'
-    }.get(size, 'card-normal')
-    
     card_style = {
         'border': '2px solid #333',
-        'borderRadius': '8px',
+        'borderRadius': '12px',
         'backgroundColor': 'white',
         'padding': '8px',
-        'margin': '2px',
+        'margin': '4px',
         'display': 'inline-block',
         'textAlign': 'center',
-        'minWidth': '40px' if size == 'small' else '60px' if size == 'normal' else '80px',
-        'minHeight': '60px' if size == 'small' else '80px' if size == 'normal' else '120px',
+        'minWidth': '50px' if size == 'small' else '70px' if size == 'normal' else '90px',
+        'minHeight': '70px' if size == 'small' else '100px' if size == 'normal' else '130px',
         'fontSize': '12px' if size == 'small' else '16px' if size == 'normal' else '24px',
         'fontWeight': 'bold',
         'cursor': 'pointer' if selectable else 'default',
-        'boxShadow': '2px 2px 4px rgba(0,0,0,0.1)',
-        'position': 'relative'
+        'boxShadow': '0 4px 8px rgba(0,0,0,0.1)',
+        'position': 'relative',
+        'transition': 'all 0.2s ease',
+        'transform': 'scale(1)'
     }
     
     if selected:
-        card_style['backgroundColor'] = '#e3f2fd'
-        card_style['border'] = '2px solid #2196f3'
+        card_style['backgroundColor'] = '#e8f5e8'
+        card_style['border'] = '3px solid #4caf50'
+        card_style['boxShadow'] = '0 0 20px rgba(76, 175, 80, 0.6)'
+        card_style['transform'] = 'scale(1.05) translateY(-5px)'
+        
+    # Hover effect for selectable cards
+    hover_class = 'card-hover' if selectable else ''
     
     if color_class == 'red':
         card_style['color'] = '#d32f2f'
@@ -384,7 +389,7 @@ def create_card_element(card_id: str, size='normal', selectable=False, selected=
         content.append(html.Div([
             html.Div(str(rank), style={'fontSize': '0.8em', 'lineHeight': '1'}),
             html.Div(suit_symbols.get(suit, ''), style={'fontSize': '0.8em', 'lineHeight': '1'})
-        ], style={'position': 'absolute', 'top': '4px', 'left': '4px'}))
+        ], style={'position': 'absolute', 'top': '6px', 'left': '6px'}))
         
         # Center
         content.append(html.Div([
@@ -396,7 +401,7 @@ def create_card_element(card_id: str, size='normal', selectable=False, selected=
         content.append(html.Div([
             html.Div(str(rank), style={'fontSize': '0.8em', 'lineHeight': '1'}),
             html.Div(suit_symbols.get(suit, ''), style={'fontSize': '0.8em', 'lineHeight': '1'})
-        ], style={'position': 'absolute', 'bottom': '4px', 'right': '4px', 'transform': 'rotate(180deg)'}))
+        ], style={'position': 'absolute', 'bottom': '6px', 'right': '6px', 'transform': 'rotate(180deg)'}))
     else:
         # Joker center
         content.append(html.Div('🃏', style={
@@ -412,7 +417,8 @@ def create_card_element(card_id: str, size='normal', selectable=False, selected=
             content,
             id={'type':'card-btn','card':card_id},
             style=card_style,
-            className='p-0'
+            className=f'p-0 {hover_class}',
+            color='light' if not selected else 'success'
         )
     else:
         return html.Div(content, style=card_style)
@@ -459,7 +465,7 @@ class GreedyBot:
         room.pending_gift = None
         room.version += 1
         room.game_log.append(f"{player.name} gifted {len(to_gift)} cards")
-        self.engine._advance_turn(room)
+        self.engine._advance_turn_if_no_pending(room)
         
     def _handle_discard(self, room_id: str, player_id: str, rem: int):
         room = self.engine.get_room(room_id)
@@ -476,7 +482,7 @@ class GreedyBot:
         room.pending_discard = None
         room.version += 1
         room.game_log.append(f"{player.name} discarded {len(to_discard)} cards")
-        self.engine._advance_turn(room)
+        self.engine._advance_turn_if_no_pending(room)
 
 # ===================== DASH APP =====================
 engine = PresidentEngine()
@@ -525,13 +531,14 @@ def create_game_layout(room: RoomState, pid: str):
     if not p: return html.Div("Error: Player not found")
     
     # Game info card
-    info = dbc.Card(dbc.CardBody([
-        html.H5(f"Room: {room.id}"),
-        html.P(f"Phase: {room.phase}"),
-        html.P(f"Turn: {(room.players[room.turn].name) if room.turn and room.turn in room.players else 'None'}"),
-        html.P(f"Current: {room.current_count or 0} x {room.current_rank or 'None'}"),
-        html.P(f"Inversion: {'Yes' if room.inversion_active else 'No'}")
-    ]), className='mb-3')
+    info = dbc.Card([
+        dbc.CardHeader(html.H4("Game Info", className='text-center mb-0')),
+        dbc.CardBody([
+            html.P([html.Strong("Turn: "), (room.players[room.turn].name) if room.turn and room.turn in room.players else 'None'], className='mb-2'),
+            html.P([html.Strong("Current: "), f"{room.current_count or 0} × {room.current_rank or 'None'}"], className='mb-2'),
+            html.P([html.Strong("Inversion: "), html.Span('YES', className='text-danger') if room.inversion_active else html.Span('NO', className='text-success')], className='mb-0'),
+        ])
+    ], className='mb-3', style={'background': 'rgba(255,255,255,0.95)', 'border': 'none', 'borderRadius': '15px', 'boxShadow': '0 8px 32px rgba(0,0,0,0.1)'})
     
     # Current pile display - CENTER AND ENLARGED
     pile_cards = []
@@ -540,21 +547,21 @@ def create_game_layout(room: RoomState, pid: str):
             pile_cards.append(create_card_element(card, size='large'))
     
     pile_display = dbc.Card([
-        dbc.CardHeader(html.H4("Current Pile", className='text-center mb-0')),
+        dbc.CardHeader(html.H3("🎯 Current Pile", className='text-center mb-0')),
         dbc.CardBody([
             html.Div(
-                pile_cards if pile_cards else [html.H5("Empty", className='text-muted')], 
+                pile_cards if pile_cards else [html.H4("🃏 Empty", className='text-muted')], 
                 className='text-center',
-                style={'minHeight': '140px', 'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center', 'flexWrap': 'wrap'}
+                style={'minHeight': '160px', 'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center', 'flexWrap': 'wrap', 'background': 'linear-gradient(45deg, #f8f9fa, #e9ecef)', 'borderRadius': '10px', 'border': '2px dashed #dee2e6'}
             ),
-            html.Small(f"Cards in discard: {len(room.discard)}", className='text-muted text-center d-block')
+            html.P(f"🗑️ Discard pile: {len(room.discard)} cards", className='text-muted text-center mt-3 mb-0')
         ])
-    ], className='mb-3')
+    ], className='mb-3', style={'background': 'rgba(255,255,255,0.95)', 'border': 'none', 'borderRadius': '15px', 'boxShadow': '0 8px 32px rgba(0,0,0,0.1)'})
     
     # Players table
     table_data = {
         'Player':[pl.name+(' (Bot)' if pl.is_bot else '') for pl in sorted(room.players.values(), key=lambda x:x.seat)],
-        'Role':[pl.role or 'None' for pl in sorted(room.players.values(), key=lambda x:x.seat)],
+        'Role':[pl.role or '-' for pl in sorted(room.players.values(), key=lambda x:x.seat)],
         'Cards':[pl.hand_count for pl in sorted(room.players.values(), key=lambda x:x.seat)],
         'Passed':['✓' if pl.passed else '' for pl in sorted(room.players.values(), key=lambda x:x.seat)],
         'Turn':['▶' if room.turn==pl.id else '' for pl in sorted(room.players.values(), key=lambda x:x.seat)]
@@ -577,56 +584,91 @@ def create_game_layout(room: RoomState, pid: str):
     
     if room.phase == 'finished':
         # Game finished - show results and restart option
+        role_colors = {
+            'President': 'success',
+            'Vice President': 'info', 
+            'Citizen': 'secondary',
+            'Scumbag': 'warning',
+            'Asshole': 'danger'
+        }
         special_prompt = [
             html.Div([
-                html.H4("Game Finished!", className="text-success"),
-                html.P(f"Your role: {p.role}", className="text-info"),
+                html.H3("🎉 Game Finished!", className="text-center text-success mb-3"),
+                dbc.Alert([
+                    html.H5(f"You are: {p.role}", className='mb-0')
+                ], color=role_colors.get(p.role, 'secondary'), className='text-center'),
+                html.Div([
+                    html.H6("Final Rankings:", className='text-center mb-2'),
+                    html.Ol([
+                        html.Li([
+                            f"{room.players[pid].name} - ",
+                            html.Span(room.players[pid].role, 
+                                className=f'badge bg-{role_colors.get(room.players[pid].role, "secondary")}')
+                        ]) for pid in room.finished_order if pid in room.players
+                    ])
+                ], className='mb-3'),
                 dbc.Button('New Game', id={'type': 'action-btn', 'action': 'restart'}, color='success', className='mt-2'),
             ], className='mb-3')
         ]
     elif room.pending_gift and room.pending_gift['player_id'] == pid:
         special_prompt = [
-            html.Div([
-                html.H6(f"You must gift {room.pending_gift['remaining']} cards!", className="text-warning"),
+            dbc.Alert([
+                html.H5(f"🎁 Gift {room.pending_gift['remaining']} cards!", className="mb-2"),
+                html.P("Select cards from your hand and click Gift", className='mb-2'),
                 dbc.Button('Gift Selected Cards', id={'type': 'game-btn', 'action': 'gift'}, color='warning', className='me-2'),
-            ], className='mb-3')
+            ], color='warning', className='mb-3')
         ]
     elif room.pending_discard and room.pending_discard['player_id'] == pid:
         special_prompt = [
-            html.Div([
-                html.H6(f"You must discard {room.pending_discard['remaining']} cards!", className="text-warning"),
+            dbc.Alert([
+                html.H5(f"🗑️ Discard {room.pending_discard['remaining']} cards!", className="mb-2"),
+                html.P("Select cards from your hand and click Discard", className='mb-2'),
                 dbc.Button('Discard Selected Cards', id={'type': 'game-btn', 'action': 'discard'}, color='warning', className='me-2'),
-            ], className='mb-3')
+            ], color='danger', className='mb-3')
         ]
     elif room.turn==pid and room.phase=='play':
         actions=[
-            dbc.Button('Play', id={'type': 'game-btn', 'action': 'play'}, color='primary', className='me-2', disabled=True),
-            dbc.Button('Pass', id={'type': 'game-btn', 'action': 'pass'}, color='warning')
+            dbc.ButtonGroup([
+                dbc.Button('🎯 Play Cards', id={'type': 'game-btn', 'action': 'play'}, color='primary', disabled=True),
+                dbc.Button('⏭️ Pass', id={'type': 'game-btn', 'action': 'pass'}, color='secondary')
+            ], className='d-grid')
         ]
     
     # Game log
-    log = html.Ul([html.Li(e) for e in room.game_log[-10:]], style={'height':'200px','overflowY':'auto'})
+    log = html.Div([
+        html.P(e, className='mb-1 p-2 bg-light rounded') for e in room.game_log[-8:]
+    ], style={'height':'200px','overflowY':'auto', 'border': '1px solid #dee2e6', 'borderRadius': '8px', 'padding': '8px'})
     
-    return dbc.Row([
-        dbc.Col([
-            info, 
-            dbc.Card([dbc.CardHeader('Players'), dbc.CardBody(table)]), 
-            dbc.Card([dbc.CardHeader('Game Log'), dbc.CardBody(log)])
-        ], width=3),
-        dbc.Col([
-            pile_display,
-        ], width=6),
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader(f'Your Hand ({p.name})'), 
-                dbc.CardBody([
-                    html.Div(special_prompt),
-                    html.Div(hand, className='mb-3', style={'display': 'flex', 'flexWrap': 'wrap', 'justifyContent': 'center'}) if hand else html.Div("No cards", className='mb-3'), 
-                    html.Div(actions)
-                ])
+    return html.Div([
+        dbc.Container([
+            dbc.Row([
+                dbc.Col([
+                    info, 
+                    dbc.Card([
+                        dbc.CardHeader(html.H5('👥 Players', className='mb-0')), 
+                        dbc.CardBody(table)
+                    ], className='mb-3', style={'background': 'rgba(255,255,255,0.95)', 'border': 'none', 'borderRadius': '15px', 'boxShadow': '0 8px 32px rgba(0,0,0,0.1)'}), 
+                    dbc.Card([
+                        dbc.CardHeader(html.H5('📜 Game Log', className='mb-0')), 
+                        dbc.CardBody(log)
+                    ], style={'background': 'rgba(255,255,255,0.95)', 'border': 'none', 'borderRadius': '15px', 'boxShadow': '0 8px 32px rgba(0,0,0,0.1)'})
+                ], width=3),
+                dbc.Col([
+                    pile_display,
+                ], width=6),
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader(html.H5(f'🃏 {p.name}\'s Hand', className='mb-0')), 
+                        dbc.CardBody([
+                            html.Div(special_prompt),
+                            html.Div(hand, className='mb-3', style={'display': 'flex', 'flexWrap': 'wrap', 'justifyContent': 'center', 'gap': '4px'}) if hand else html.Div("🚫 No cards", className='mb-3 text-center text-muted'), 
+                            html.Div(actions, className='text-center')
+                        ])
+                    ], style={'background': 'rgba(255,255,255,0.95)', 'border': 'none', 'borderRadius': '15px', 'boxShadow': '0 8px 32px rgba(0,0,0,0.1)'})
+                ], width=3)
             ])
-        ], width=3)
-    ])
+        ], fluid=True)
+    ], style={'background': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 'minHeight': '100vh', 'padding': '20px'})
 
 app.layout = create_main_layout()
 
@@ -685,7 +727,7 @@ def start_singleplayer(n_single):
 def handle_all_card_actions(card_clicks, game_btn_clicks, selected, ids, rid, pid):
     ctx = callback_context
     if not ctx.triggered:
-        return selected or [], [('primary' if (ids and selected and id['card'] in selected) else 'light') for id in (ids or [])]
+        return selected or [], [('success' if (ids and selected and id['card'] in selected) else 'light') for id in (ids or [])]
     
     trig = ctx.triggered[0]['prop_id']
     
@@ -698,7 +740,7 @@ def handle_all_card_actions(card_clicks, game_btn_clicks, selected, ids, rid, pi
             selected = [c for c in selected if c != card]
         else:
             selected = selected + [card]
-        colors = [('primary' if id['card'] in selected else 'light') for id in ids]
+        colors = [('success' if id['card'] in selected else 'light') for id in ids]
         return selected, colors
     
     # Handle action buttons - all clear selection after action
@@ -714,7 +756,9 @@ def handle_all_card_actions(card_clicks, game_btn_clicks, selected, ids, rid, pi
         room = engine.get_room(rid)
         if room and room.pending_gift and room.pending_gift['player_id'] == pid:
             required = room.pending_gift['remaining']
-            to_gift = selected[:required] if len(selected) >= required else selected.copy()
+            if len(selected) < required:
+                return selected, [('success' if id['card'] in selected else 'light') for id in ids]  # Don't process if not enough cards
+            to_gift = selected[:required]
             player = room.players[pid]
             for card in to_gift:
                 if card in player.hand:
@@ -723,14 +767,16 @@ def handle_all_card_actions(card_clicks, game_btn_clicks, selected, ids, rid, pi
             room.pending_gift = None
             room.version += 1
             room.game_log.append(f"{player.name} gifted {len(to_gift)} cards")
-            engine._advance_turn(room)
+            engine._advance_turn_if_no_pending(room)
         return [], ['light' for id in ids]
         
     elif 'discard' in trig and selected and rid and pid:
         room = engine.get_room(rid)
         if room and room.pending_discard and room.pending_discard['player_id'] == pid:
             required = room.pending_discard['remaining']
-            to_discard = selected[:required] if len(selected) >= required else selected.copy()
+            if len(selected) != required:
+                return selected, [('success' if id['card'] in selected else 'light') for id in ids]  # Must select exactly the required number
+            to_discard = selected
             player = room.players[pid]
             for card in to_discard:
                 if card in player.hand:
@@ -740,10 +786,10 @@ def handle_all_card_actions(card_clicks, game_btn_clicks, selected, ids, rid, pi
             room.pending_discard = None
             room.version += 1
             room.game_log.append(f"{player.name} discarded {len(to_discard)} cards")
-            engine._advance_turn(room)
+            engine._advance_turn_if_no_pending(room)
         return [], ['light' for id in ids]
     
-    return selected or [], [('primary' if (ids and selected and id['card'] in selected) else 'light') for id in (ids or [])]
+    return selected or [], [('success' if (ids and selected and id['card'] in selected) else 'light') for id in (ids or [])]
 
 @app.callback(
     Output({'type': 'game-btn', 'action': 'play'},'disabled'),
