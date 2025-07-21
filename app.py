@@ -48,6 +48,9 @@ class RoomState:
     pending_discard: Optional[dict] = None
     last_play: Optional[dict] = None
     game_log: List[str] = field(default_factory=list)
+    first_game: bool = True # Add this field
+    last_round_winner: Optional[str] = None # Add this field
+    first_game_first_play_done: bool = False # Add this field
 
 # ===================== GAME CONSTANTS & UTILS =====================
 
@@ -137,26 +140,38 @@ class PresidentEngine:
                 player.hand = deck[start_idx:end_idx]
                 player.hand_count = len(player.hand)
                 player.passed = False
-            starter = None
-            for player in players:
-                if '3D' in player.hand:
-                    starter = player.id
-                    break
-            
-            if not starter:
-                # If no 3♦ found, assign to first player (shouldn't happen with proper deck)
-                starter = players[0].id
-                
-            room.turn = starter
+            # 3. Set first_game flag
+            if not hasattr(room, 'first_game'):
+                room.first_game = True
+            # 4. Set starter
+            if room.first_game:
+                starter = None
+                for player in players:
+                    if '3D' in player.hand:
+                        starter = player.id
+                        break
+                if not starter:
+                    starter = players[0].id
+                room.turn = starter
+            else:
+                # Asshole from previous game starts
+                asshole_id = None
+                if room.finished_order:
+                    asshole_id = room.finished_order[-1]
+                if asshole_id and asshole_id in room.players:
+                    room.turn = asshole_id
+                else:
+                    room.turn = players[0].id
             room.phase = 'play'
             room.current_rank = None
             room.current_count = None
             room.inversion_active = False
             room.version += 1
-            
-            starter_name = room.players[starter].name
-            print(f"Game started! {starter_name} goes first (has 3♦)")
-            room.game_log.append(f"Game started! {starter_name} goes first (has 3♦)")
+            starter_name = room.players[room.turn].name
+            if room.first_game:
+                room.game_log.append(f"Game started! {starter_name} goes first (has 3♦)")
+            else:
+                room.game_log.append(f"New round! {starter_name} (Asshole) goes first")
             return True, "Game started!"
     
     def validate_play(self, room: RoomState, player_id: str, card_ids: List[str]) -> Tuple[bool, str, Optional[dict]]:
@@ -190,13 +205,11 @@ class PresidentEngine:
             
         play_count = len(card_ids)
         
+        # Only enforce 3s rule if first_game and opening play
         if room.current_rank is None:
-            # Special rule for opening play: MUST start with 3s if it's the very first play
-            if not hasattr(room, 'first_play_made'):
-                # This is the very first play of the entire game
+            if getattr(room, 'first_game', True) and not getattr(room, 'first_game_first_play_done', False):
                 if play_rank != 3:
                     return False, "First play of the game must be 3s", None
-                room.first_play_made = True  # Mark that first play has been made
             effect = self._get_effect_type(play_rank)
             return True, "Valid play", {'rank': play_rank, 'count': play_count, 'effect': effect}
         if play_count != room.current_count:
@@ -234,6 +247,9 @@ class PresidentEngine:
             valid, message, pattern = self.validate_play(room, player_id, card_ids)
             if not valid:
                 return False, message
+            # Mark first play of first game as done
+            if getattr(room, 'first_game', True) and not getattr(room, 'first_game_first_play_done', False) and room.current_rank is None:
+                room.first_game_first_play_done = True
             player = room.players[player_id]
             for card_id in card_ids:
                 player.hand.remove(card_id)
@@ -278,6 +294,7 @@ class PresidentEngine:
                 for p in room.players.values(): p.passed = False
                 room.version += 1
                 room.game_log.append(f"{player.name} starts new round after auto-win")
+                room.last_round_winner = player_id  # Set last_round_winner
                 return True, "Auto-win! New round started"
             
             effect_applied = False
@@ -302,6 +319,7 @@ class PresidentEngine:
                     room.current_count = None
                     room.inversion_active = False
                     room.game_log.append(f"{player.name} played {pattern['count']} 8s - pile cleared!")
+                    room.last_round_winner = player_id  # Set last_round_winner
                 else:
                     self._advance_turn(room)
             room.version += 1
@@ -462,6 +480,7 @@ class PresidentEngine:
                 if room.last_play:
                     room.turn = room.last_play['player_id']
                     room.game_log.append(f"{room.players[room.turn].name} starts new round")
+                    room.last_round_winner = room.last_play['player_id'] # Set last_round_winner
                 for p in room.players.values(): p.passed = False
             else:
                 self._advance_turn(room)
@@ -487,6 +506,8 @@ class PresidentEngine:
         for i, pid in enumerate(room.finished_order):
             p = room.players[pid]
             room.game_log.append(f"{i+1}. {p.name} - {p.role}")
+        # Set first_game to False after first game ends
+        room.first_game = False
 
     def _format_card(self, card_id: str) -> str:
         rank, suit = parse_card(card_id)
@@ -600,12 +621,50 @@ class GreedyBot:
         if room.pending_discard and room.pending_discard['player_id'] == player_id:
             self._handle_discard(room_id, player_id, room.pending_discard['remaining']); return
         player = room.players[player_id]
-        plays = self._get_possible_plays(room, player)
-        if plays:
-            best = max(plays, key=len)
+        # --- PATCH: allow any valid play on empty pile except for very first play of first game ---
+        hand = player.hand
+        valid_plays = []
+        if room.current_rank is None:
+            # Only restrict to 3s for the very first play of the first game
+            if getattr(room, 'first_game', True) and not getattr(room, 'first_game_first_play_done', False):
+                # Only 3s by 3♦ holder
+                if '3D' in hand and 3 in [parse_card(c)[0] for c in hand]:
+                    threes = [c for c in hand if parse_card(c)[0] == 3]
+                    for cnt in range(1, len(threes)+1):
+                        valid_plays.append(threes[:cnt])
+            else:
+                # Any valid set from hand
+                rank_groups = {}
+                for card in hand:
+                    rank = parse_card(card)[0]
+                    if rank not in rank_groups:
+                        rank_groups[rank] = []
+                    rank_groups[rank].append(card)
+                for rank, cards in rank_groups.items():
+                    for cnt in range(1, len(cards)+1):
+                        play = cards[:cnt]
+                        ok,_,_ = self.engine.validate_play(room, player_id, play)
+                        if ok:
+                            valid_plays.append(play)
+        else:
+            # Normal play: must match count and be higher rank
+            groups = defaultdict(list)
+            for c in hand:
+                r,_ = parse_card(c)
+                groups[r].append(c)
+            for rank, cards in groups.items():
+                if len(cards) >= room.current_count:
+                    play = cards[:room.current_count]
+                    ok,_,_ = self.engine.validate_play(room, player_id, play)
+                    if ok:
+                        valid_plays.append(play)
+        if valid_plays:
+            # Use the same scoring as before
+            best = max(valid_plays, key=len)
             self.engine.play_cards(room_id, player_id, best)
         else:
             self.engine.pass_turn(room_id, player_id)
+
     def _get_possible_plays(self, room: RoomState, player: Player) -> List[List[str]]:
         groups = defaultdict(list)
         for c in player.hand:
