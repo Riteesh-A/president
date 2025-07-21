@@ -263,6 +263,7 @@ def reset_for_new_round(state: RoomState) -> RoomState:
     new_state.current_pattern.rank = None
     new_state.current_pattern.count = None
     new_state.current_pattern.last_player = None
+    new_state.current_pattern.cards = []
     new_state.inversion_active = False
     new_state.pending_gift = None
     new_state.pending_discard = None

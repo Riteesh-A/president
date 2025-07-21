@@ -216,6 +216,7 @@ def play_cards(state: RoomState, player_id: str, card_ids: List[str]) -> GameRes
         new_state.current_pattern.rank = pattern['rank']
         new_state.current_pattern.count = pattern['count']
         new_state.current_pattern.last_player = player_id
+        new_state.current_pattern.cards = card_ids.copy()
         
         # Clear passes for new round
         new_state.clear_passes()
@@ -310,6 +311,7 @@ def pass_turn(state: RoomState, player_id: str) -> GameResult:
             new_state.current_pattern.rank = None
             new_state.current_pattern.count = None
             new_state.current_pattern.last_player = None
+            new_state.current_pattern.cards = []
             new_state.inversion_active = False
             new_state.clear_passes()
             

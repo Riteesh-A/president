@@ -15,6 +15,7 @@ export interface CurrentPattern {
   rank?: string | number;
   count?: number;
   last_player?: string;
+  cards?: string[]; // Cards currently in the pile
 }
 
 export interface PendingEffect {
@@ -58,6 +59,7 @@ export interface GameState {
   players: Record<string, Player>;
   pending_effects: PendingEffect;
   recent_effects: EffectLogEntry[];
+  discard: string[];
   rules?: GameRules;
 }
 
@@ -96,6 +98,11 @@ export interface EffectEvent extends WSEvent {
   data: any;
 }
 
+export interface JoinSuccessEvent extends WSEvent {
+  type: 'join_success';
+  player_id: string;
+}
+
 export interface ChatEvent extends WSEvent {
   type: 'chat';
   player_id: string;
@@ -103,7 +110,7 @@ export interface ChatEvent extends WSEvent {
   text: string;
 }
 
-export type InboundWSEvent = StateFullEvent | StatePatchEvent | ErrorEvent | EffectEvent | ChatEvent;
+export type InboundWSEvent = JoinSuccessEvent | StateFullEvent | StatePatchEvent | ErrorEvent | EffectEvent | ChatEvent;
 
 // Outbound event types
 export interface JoinEvent {

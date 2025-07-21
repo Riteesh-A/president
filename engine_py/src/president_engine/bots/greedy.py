@@ -26,27 +26,40 @@ class GreedyBot(BaseBot):
     def choose_action(self, state: RoomState) -> Optional[BotAction]:
         """Choose the best action for the current state."""
         
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Handle pending effects first
         if self.has_pending_gift(state):
+            logger.info(f"Bot {self.player_id} has pending gift")
             return self._choose_gift_distribution(state)
         
         if self.has_pending_discard(state):
+            logger.info(f"Bot {self.player_id} has pending discard")
             return self._choose_discard_selection(state)
         
         if self.has_pending_exchange(state):
+            logger.info(f"Bot {self.player_id} has pending exchange")
             return self._choose_exchange_return(state)
         
         # Handle regular play
         if state.phase == "play" and self.is_my_turn(state):
-            return self._choose_play_action(state)
+            logger.info(f"Bot {self.player_id} choosing play action")
+            action = self._choose_play_action(state)
+            logger.info(f"Bot {self.player_id} chose action: {action.type if action else 'None'}")
+            return action
         
         return None
     
     def _choose_play_action(self, state: RoomState) -> BotAction:
         """Choose whether to play cards or pass."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         valid_plays = self.get_valid_plays(state)
         
         if not valid_plays:
+            logger.info(f"Bot {self.player_id} no valid plays, passing")
             return BotAction.pass_turn()
         
         # Score each valid play
@@ -59,9 +72,12 @@ class GreedyBot(BaseBot):
                 best_score = score
                 best_play = play
         
-        if best_play and best_score > self._get_pass_threshold(state):
+        # Make bots more aggressive - lower threshold
+        if best_play and best_score > -50:  # Much lower threshold
+            logger.info(f"Bot {self.player_id} playing {best_play}")
             return BotAction.play(best_play)
         else:
+            logger.info(f"Bot {self.player_id} passing (score {best_score})")
             return BotAction.pass_turn()
     
     def _score_play(self, state: RoomState, cards: List[str]) -> float:

@@ -7,6 +7,7 @@ import { Hand, RotateCcw, SkipForward, Gift } from 'lucide-react';
 export function GameTable() {
   const { 
     gameState, 
+    playerId,
     selectedCards, 
     playCards, 
     passTurn, 
@@ -15,17 +16,30 @@ export function GameTable() {
     clearSelection 
   } = useGameStore();
 
-  if (!gameState) return null;
+  if (!gameState || !playerId) return null;
 
-  const currentPlayer = Object.values(gameState.players).find(p => p.hand);
-  const isMyTurn = gameState.turn === currentPlayer?.id;
+  const currentPlayer = gameState.players[playerId];
+  const isMyTurn = gameState.turn === playerId;
   const canPlay = selectedCards.length > 0 && isMyTurn && gameState.phase === 'play';
-  const canPass = isMyTurn && gameState.phase === 'play' && gameState.current_pattern.rank;
+  const canPass = isMyTurn && gameState.phase === 'play';
+
+  // Debug logging
+  console.log(`🎮 GAME DEBUG:`, {
+    myPlayerId: playerId,
+    currentTurn: gameState.turn,
+    phase: gameState.phase,
+    isMyTurn,
+    canPlay,
+    selectedCards: selectedCards.length
+  });
 
   const handleCardClick = (cardId: string) => {
+    console.log(`Card clicked: ${cardId}, isMyTurn: ${isMyTurn}, phase: ${gameState.phase}`);
     if (selectedCards.includes(cardId)) {
+      console.log(`Deselecting card: ${cardId}`);
       deselectCard(cardId);
     } else {
+      console.log(`Selecting card: ${cardId}`);
       selectCard(cardId);
     }
   };
@@ -43,12 +57,19 @@ export function GameTable() {
   };
 
   const getCurrentPatternDisplay = () => {
-    const { rank, count } = gameState.current_pattern;
+    const { rank, count, cards } = gameState.current_pattern;
     if (!rank || !count) return 'No cards played yet';
     
-    const rankDisplay = typeof rank === 'number' ? rank.toString() : rank;
+    // Make count a text string instead of a number
+    const countDisplay = count.toString();
+    const rankDisplay = typeof rank === 'number' ? rank : rank;
     const plural = count > 1 ? 's' : '';
-    return `${count} ${rankDisplay}${plural}`;
+    return `${countDisplay} ${rankDisplay}${plural} played`;
+  };
+
+  const getCurrentPileCards = () => {
+    // Access cards from current_pattern if it exists
+    return gameState.current_pattern?.cards || [];
   };
 
   return (
@@ -85,6 +106,43 @@ export function GameTable() {
           </div>
         </div>
       </div>
+
+      {/* Current Pile */}
+      {getCurrentPileCards().length > 0 && (
+        <div className="card p-4 mb-6">
+          <h3 className="text-lg font-medium mb-3">Current Pile</h3>
+          <div className="flex flex-wrap gap-2">
+            {getCurrentPileCards().map((cardId) => (
+              <Card
+                key={cardId}
+                cardId={cardId}
+                selected={false}
+                onClick={() => {}}
+                disabled={true}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Discard Pile */}
+      {gameState.discard && gameState.discard.length > 0 && (
+        <div className="card p-4 mb-6">
+          <h3 className="text-lg font-medium mb-3">Discard Pile ({gameState.discard.length} cards)</h3>
+          <div className="flex flex-wrap gap-2">
+            {gameState.discard.slice(-10).map((cardId, index) => (
+              <div key={`${cardId}-${index}`} className="w-12 h-16 bg-gray-200 rounded border-2 border-dashed border-gray-400 flex items-center justify-center">
+                <span className="text-xs text-gray-500">?</span>
+              </div>
+            ))}
+            {gameState.discard.length > 10 && (
+              <div className="w-12 h-16 bg-gray-100 rounded border flex items-center justify-center">
+                <span className="text-xs text-gray-600">+{gameState.discard.length - 10}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Players Around Table */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -157,15 +215,20 @@ export function GameTable() {
           
           {/* Cards */}
           <div className="flex flex-wrap gap-2 mb-4">
-            {currentPlayer.hand.map((cardId) => (
+            {currentPlayer.hand.map((cardId) => {
+              const isCardDisabled = !isMyTurn || gameState.phase !== 'play';
+              console.log(`🃏 Card ${cardId} disabled: ${isCardDisabled} (isMyTurn=${isMyTurn}, phase=${gameState.phase})`);
+              return (
               <Card
                 key={cardId}
                 cardId={cardId}
                 selected={selectedCards.includes(cardId)}
                 onClick={() => handleCardClick(cardId)}
-                disabled={!isMyTurn || gameState.phase !== 'play'}
+                disabled={isCardDisabled}
+                // Debug: disabled={!true || 'play' !== 'play'} = disabled={false || false} = false
               />
-            ))}
+            );
+            })}
           </div>
           
           {/* Actions */}

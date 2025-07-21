@@ -23,6 +23,7 @@ class EventType(str, Enum):
 
 class OutboundEventType(str, Enum):
     """Outbound event types."""
+    JOIN_SUCCESS = "join_success"
     STATE_FULL = "state_full"
     STATE_PATCH = "state_patch"
     EFFECT = "effect"
@@ -134,6 +135,13 @@ InboundEvent = Union[
 
 
 # Outbound event models
+class JoinSuccessEvent(BaseModel):
+    """Join success confirmation event."""
+    type: OutboundEventType = OutboundEventType.JOIN_SUCCESS
+    player_id: str
+    timestamp: float
+
+
 class StateFullEvent(BaseModel):
     """Full state event."""
     type: OutboundEventType = OutboundEventType.STATE_FULL
@@ -183,6 +191,7 @@ class ChatMessageEvent(BaseModel):
 
 # Union type for all outbound events
 OutboundEvent = Union[
+    JoinSuccessEvent,
     StateFullEvent,
     StatePatchEvent,
     EffectEvent,
@@ -243,6 +252,15 @@ def create_error_event(code: ErrorCode, message: str) -> ErrorEvent:
     return ErrorEvent(
         code=code,
         message=message,
+        timestamp=time.time()
+    )
+
+
+def create_join_success_event(player_id: str) -> JoinSuccessEvent:
+    """Create a join success event."""
+    import time
+    return JoinSuccessEvent(
+        player_id=player_id,
         timestamp=time.time()
     )
 

@@ -29,9 +29,11 @@ def sanitize_state(state: RoomState, viewer_id: Optional[str] = None) -> Dict[st
         "current_pattern": {
             "rank": state.current_pattern.rank,
             "count": state.current_pattern.count,
-            "last_player": state.current_pattern.last_player
+            "last_player": state.current_pattern.last_player,
+            "cards": state.current_pattern.cards.copy() if isinstance(state.current_pattern.cards, list) else []
         },
         "finished_order": state.finished_order.copy(),
+        "discard": state.discard.copy(),
         "players": {},
         "pending_effects": {},
         "recent_effects": [],
@@ -48,12 +50,16 @@ def sanitize_state(state: RoomState, viewer_id: Optional[str] = None) -> Dict[st
             "passed": player.passed,
             "connected": player.connected,
             "is_bot": player.is_bot,
-            "hand_count": len(player.hand)
+            "hand_count": len(player.hand) if isinstance(player.hand, list) else player.hand
         }
         
         # Show full hand only to the viewer
         if player_id == viewer_id:
-            sanitized_player["hand"] = player.hand.copy()
+            from .shuffle import sort_hand
+            # Defensive check: ensure hand is a list
+            hand = player.hand if isinstance(player.hand, list) else []
+            sorted_hand = sort_hand(hand.copy(), state.inversion_active)
+            sanitized_player["hand"] = sorted_hand
         
         sanitized["players"][player_id] = sanitized_player
     

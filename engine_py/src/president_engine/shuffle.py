@@ -99,6 +99,25 @@ def find_starting_player(players: Dict[str, Player]) -> Optional[str]:
     return None
 
 
+def find_asshole_player(players: Dict[str, Player]) -> Optional[str]:
+    """
+    Find the player with Asshole role (starts subsequent games).
+    
+    Args:
+        players: Dictionary of players with their roles
+    
+    Returns:
+        Player ID who has Asshole role, or None if not found
+    """
+    from .constants import ROLE_ASSHOLE
+    
+    for player_id, player in players.items():
+        if player.role == ROLE_ASSHOLE:
+            return player_id
+    
+    return None
+
+
 def setup_round(state: RoomState, seed: Optional[int] = None) -> RoomState:
     """
     Set up a new round by shuffling and dealing cards.
@@ -124,8 +143,49 @@ def setup_round(state: RoomState, seed: Optional[int] = None) -> RoomState:
     for player_id, cards in hands.items():
         state.players[player_id].hand = cards
     
-    # Find starting player
-    starting_player = find_starting_player(state.players)
+    # Find starting player based on game type (Section 4.3 spec compliance):
+    # - First game: Player with 3♦ (Three of Diamonds) starts and must play 3s
+    # - Subsequent games: Asshole starts with any cards they choose
+    has_roles = any(player.role for player in state.players.values())
+    
+    print(f"DEBUG: has_roles = {has_roles}")
+    print(f"DEBUG: players and their roles:")
+    for pid, player in state.players.items():
+        print(f"  {player.name}: role = {player.role}")
+    
+    if has_roles:
+        # Subsequent game: Asshole starts
+        starting_player = find_asshole_player(state.players)
+        print(f"DEBUG: Subsequent game, Asshole starts: {starting_player}")
+        
+        # Fallback if no Asshole found (shouldn't happen)
+        if starting_player is None:
+            print("WARNING: No Asshole found for subsequent game, falling back to 3♦ holder")
+            starting_player = find_starting_player(state.players)
+    else:
+        # First game: Player with 3♦ starts
+        starting_player = find_starting_player(state.players)
+        print(f"DEBUG: First game, looking for 3♦ holder: {starting_player}")
+        
+        # Debug: show all hands
+        print(f"DEBUG: All player hands:")
+        for pid, player in state.players.items():
+            print(f"  {player.name}: {player.hand}")
+            if "3D" in player.hand:
+                print(f"    *** {player.name} has 3♦! ***")
+        
+        # Error handling: if no one has 3♦ (shouldn't happen with proper deck)
+        if starting_player is None:
+            print("ERROR: No player found with 3♦! This shouldn't happen.")
+            # Fallback to first player as emergency measure
+            starting_player = list(state.players.keys())[0] if state.players else None
+    
+    print(f"DEBUG: Final starting player: {starting_player}")
+    if starting_player:
+        print(f"DEBUG: Starting player name: {state.players[starting_player].name}")
+        print(f"DEBUG: Starting player hand: {state.players[starting_player].hand}")
+    else:
+        raise ValueError("No valid starting player found - this should never happen with a proper deck")
     
     # Update state
     state.deck = []  # All cards dealt
@@ -142,6 +202,7 @@ def setup_round(state: RoomState, seed: Optional[int] = None) -> RoomState:
     state.current_pattern.rank = None
     state.current_pattern.count = None
     state.current_pattern.last_player = None
+    state.current_pattern.cards = []
     
     # Clear all passes
     state.clear_passes()

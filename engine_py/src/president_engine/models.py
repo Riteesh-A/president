@@ -62,6 +62,7 @@ class CurrentPattern:
     rank: Optional[Rank] = None
     count: Optional[int] = None
     last_player: Optional[str] = None
+    cards: List[str] = field(default_factory=list)  # Actual cards in the pile
 
 
 @dataclass

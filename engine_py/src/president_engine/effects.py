@@ -61,6 +61,7 @@ def apply_eight_reset(state: RoomState, player_id: str) -> RoomState:
     new_state.current_pattern.rank = None
     new_state.current_pattern.count = None
     new_state.current_pattern.last_player = None
+    new_state.current_pattern.cards = []
     
     # Clear inversion if active (round ended)
     new_state.inversion_active = False
@@ -232,6 +233,7 @@ def complete_discard_selection(
     new_state.current_pattern.rank = None
     new_state.current_pattern.count = None
     new_state.current_pattern.last_player = None
+    new_state.current_pattern.cards = []
     
     # Clear all passes for new round
     new_state.clear_passes()

@@ -163,18 +163,32 @@ def validate_play(
             "Cards do not form a valid pattern"
         )
     
-    # Check if this is opening play with 3s
+    # Check if this is opening play 
     current_rank = state.current_pattern.rank
     current_count = state.current_pattern.count
     
     if current_rank is None:
-        # Opening play - must be 3s or have 3♦
-        from .constants import STARTING_CARD
-        if rank != 3 and STARTING_CARD not in card_ids:
-            return ValidationResult.error(
-                ERROR_PATTERN_MISMATCH,
-                "Opening play must include threes"
-            )
+        # Opening play - Section 4.3 compliance: first game starts with 3♦ holder playing 3s
+        has_roles = any(p.role for p in state.players.values())
+        
+        if not has_roles:
+            # First game: must play 3s and player must have 3♦ (Section 4.3)
+            from .constants import STARTING_CARD
+            
+            # Verify this player has the 3♦ (additional safety check)
+            if STARTING_CARD not in player.hand:
+                return ValidationResult.error(
+                    ERROR_NOT_YOUR_TURN,
+                    "Only the player with 3♦ (Three of Diamonds) can start the first game"
+                )
+            
+            # Must play 3s on opening (Section 4.3: "may play any number of 3s they possess")
+            if rank != 3:
+                return ValidationResult.error(
+                    ERROR_PATTERN_MISMATCH,
+                    "First game opening play must be threes (per Section 4.3)"
+                )
+        # For subsequent games: Asshole can play any cards (no restriction)
     else:
         # Must match count
         if count != current_count:

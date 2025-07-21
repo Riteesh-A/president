@@ -36,7 +36,7 @@ def compute_diff(
     # Check top-level fields
     top_level_fields = [
         "version", "phase", "turn", "inversion_active",
-        "finished_order"
+        "finished_order", "discard"
     ]
     
     for field in top_level_fields:
@@ -54,7 +54,7 @@ def compute_diff(
     old_pattern = old_sanitized.get("current_pattern", {})
     new_pattern = new_sanitized.get("current_pattern", {})
     
-    for pattern_field in ["rank", "count", "last_player"]:
+    for pattern_field in ["rank", "count", "last_player", "cards"]:
         old_value = old_pattern.get(pattern_field)
         new_value = new_pattern.get(pattern_field)
         
@@ -125,6 +125,12 @@ def compute_diff(
     # Check recent effects (only add if new effects were added)
     old_recent = old_sanitized.get("recent_effects", [])
     new_recent = new_sanitized.get("recent_effects", [])
+    
+    # Ensure both are lists
+    if not isinstance(old_recent, list):
+        old_recent = []
+    if not isinstance(new_recent, list):
+        new_recent = []
     
     if len(new_recent) > len(old_recent):
         # New effects added, send the new ones

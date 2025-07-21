@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>President Game</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f0f2f5; color: #1c1e21; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: auto; }
+        .lobby, .game-board { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .hidden { display: none; }
+        h1, h2 { text-align: center; color: #0d6efd; }
+        .player-hand { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 20px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; min-height: 100px; background-color: #f9f9f9; }
+        .card { padding: 10px 15px; border: 1px solid #ccc; border-radius: 6px; background-color: white; cursor: pointer; user-select: none; transition: all 0.2s; font-weight: bold; min-width: 40px; text-align: center; }
+        .card.selected { border-color: #0d6efd; background-color: #e7f3ff; transform: translateY(-10px); }
+        .controls { text-align: center; margin-top: 20px; }
+        button { background-color: #0d6efd; color: white; border: none; padding: 10px 20px; border-radius: 5px; font-size: 16px; cursor: pointer; transition: background-color 0.2s; margin: 0 5px;}
+        button:hover { background-color: #0b5ed7; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .table { min-height: 120px; border: 2px dashed #ccc; border-radius: 8px; margin: 20px auto; padding: 10px; display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 10px; }
+        .opponents { display: flex; justify-content: space-around; margin: 20px 0; }
+        .opponent { padding: 15px; border: 1px solid #ddd; border-radius: 8px; text-align: center; background: #fafafa; }
+        .opponent.is-turn { border-color: #0d6efd; box-shadow: 0 0 10px #0d6efd; }
+        .opponent .role { font-weight: bold; color: #0d6efd; }
+        .game-info { text-align: center; margin-bottom: 20px; font-size: 1.1em; }
+        #login-form input { padding: 8px; margin: 5px; border: 1px solid #ccc; border-radius: 4px; }
+        .finished-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); color: white; display: flex; justify-content: center; align-items: center; text-align: center; }
+        .finished-box { background: #333; padding: 40px; border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="lobby" class="lobby">
+            <h1>President Game Lobby</h1>
+            <div id="login-form">
+                <input type="text" id="room-name" placeholder="Room Name" value="default-room">
+                <input type="text" id="player-name" placeholder="Your Name">
+                <button id="join-btn">Join Game</button>
+            </div>
+        </div>
+
+        <div id="game-board" class="game-board hidden">
+            <h2 id="room-title"></h2>
+            <div class="game-info" id="game-info">Waiting for players...</div>
+            <div class="opponents" id="opponents-area"></div>
+            <h2>Last Play</h2>
+            <div class="table" id="table-area"></div>
+            <h2>Your Hand</h2>
+            <div class="player-hand" id="player-hand-area"></div>
+            <div class="controls">
+                <button id="play-btn" disabled>Play Selected</button>
+                <button id="pass-btn" disabled>Pass</button>
+                <button id="start-btn">Start Game</button>
+                <button id="add-bot-btn">Fill with Bots & Start</button>
+            </div>
+        </div>
+
+        <div id="finished-overlay" class="finished-overlay hidden">
+             <div class="finished-box">
+                <h1 id="finished-title">Game Over!</h1>
+                <div id="finished-ranks"></div>
+                <button id="next-game-btn">Play Next Round</button>
+             </div>
+        </div>
+    </div>
+
+    <script>
+        const lobby = document.getElementById('lobby');
+        const gameBoard = document.getElementById('game-board');
+        const joinBtn = document.getElementById('join-btn');
+        const roomNameInput = document.getElementById('room-name');
+        const playerNameInput = document.getElementById('player-name');
+        const playBtn = document.getElementById('play-btn');
+        const passBtn = document.getElementById('pass-btn');
+        const startBtn = document.getElementById('start-btn');
+        const addBotBtn = document.getElementById('add-bot-btn');
+
+        let ws;
+        let playerId = `player_${Math.random().toString(36).substr(2, 9)}`;
+
+        joinBtn.addEventListener('click', () => {
+            const roomName = roomNameInput.value.trim();
+            const playerName = playerNameInput.value.trim();
+            if (!roomName || !playerName) {
+                alert('Please enter a room and player name.');
+                return;
+            }
+
+            lobby.classList.add('hidden');
+            gameBoard.classList.remove('hidden');
+            document.getElementById('room-title').innerText = `Room: ${roomName}`;
+
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws/${roomName}/${playerId}/${playerName}`);
+            
+            ws.onmessage = (event) => {
+                const state = JSON.parse(event.data);
+                if (state.error) {
+                    alert(`Error: ${state.error}`);
+                    return;
+                }
+                updateUI(state);
+            };
+        });
+
+        function updateUI(state) {
+            const player = state.players.find(p => p.id === playerId);
+            const isMyTurn = state.turn_player_id === playerId && state.phase === 'play';
+            
+            // Player Hand
+            const handArea = document.getElementById('player-hand-area');
+            handArea.innerHTML = '';
+            if (player && player.hand) {
+                player.hand.forEach(cardStr => {
+                    const cardDiv = document.createElement('div');
+                    cardDiv.className = 'card';
+                    cardDiv.dataset.card = cardStr;
+                    cardDiv.innerText = cardStr.replace('T','10').replace('X', 'Joker');
+                    cardDiv.addEventListener('click', () => {
+                        if (isMyTurn) cardDiv.classList.toggle('selected');
+                    });
+                    handArea.appendChild(cardDiv);
+                });
+            }
+
+            // Opponents
+            const opponentsArea = document.getElementById('opponents-area');
+            opponentsArea.innerHTML = '';
+            state.players.filter(p => p.id !== playerId).forEach(opp => {
+                const oppDiv = document.createElement('div');
+                oppDiv.className = 'opponent';
+                if (state.turn_player_id === opp.id) oppDiv.classList.add('is-turn');
+                oppDiv.innerHTML = `
+                    <div>${opp.name} ${opp.is_bot ? '(Bot)' : ''}</div>
+                    <div>Cards: ${opp.card_count}</div>
+                    ${opp.role ? `<div class="role">${opp.role}</div>` : ''}
+                    ${opp.has_passed ? `<div>PASSED</div>` : ''}
+                `;
+                opponentsArea.appendChild(oppDiv);
+            });
+
+            // Table
+            const tableArea = document.getElementById('table-area');
+            tableArea.innerHTML = '';
+            if (state.last_play && state.last_play.cards) {
+                 state.last_play.cards.forEach(cardStr => {
+                    const cardDiv = document.createElement('div');
+                    cardDiv.className = 'card';
+                    cardDiv.innerText = cardStr.replace('T','10').replace('X', 'Joker');
+                    tableArea.appendChild(cardDiv);
+                 });
+            }
+
+            // Game Info
+            const infoArea = document.getElementById('game-info');
+            const turnPlayer = state.players.find(p => p.id === state.turn_player_id);
+            if (state.phase === 'play' && turnPlayer) {
+                infoArea.innerText = `Turn: ${turnPlayer.name}. Inversion is ${state.inversion_active ? 'ON' : 'OFF'}.`;
+            } else if (state.phase === 'lobby') {
+                 infoArea.innerText = `Lobby - Players: ${state.players.map(p=>p.name).join(', ')}`;
+            } else if (state.phase === 'exchange') {
+                 infoArea.innerText = `Exchanging cards...`;
+            } else {
+                infoArea.innerText = `Game Phase: ${state.phase}`;
+            }
+
+            // Buttons
+            playBtn.disabled = !isMyTurn;
+            passBtn.disabled = !isMyTurn || !state.last_play;
+            startBtn.style.display = state.phase === 'lobby' ? 'inline-block' : 'none';
+            addBotBtn.style.display = state.phase === 'lobby' ? 'inline-block' : 'none';
+
+            // Finished Overlay
+            const finishedOverlay = document.getElementById('finished-overlay');
+            if (state.phase === 'finished') {
+                const ranksDiv = document.getElementById('finished-ranks');
+                ranksDiv.innerHTML = state.finished_order.map(pid => {
+                    const p = state.players.find(pl => pl.id === pid);
+                    return `<h3>${p.finished_rank}. ${p.name} (${p.role})</h3>`;
+                }).join('');
+                finishedOverlay.classList.remove('hidden');
+            } else {
+                finishedOverlay.classList.add('hidden');
+            }
+        }
+
+        playBtn.addEventListener('click', () => {
+            const selectedCards = Array.from(document.querySelectorAll('.card.selected')).map(c => c.dataset.card);
+            if (selectedCards.length > 0) {
+                ws.send(JSON.stringify({ action: 'play', cards: selectedCards }));
+            }
+        });
+
+        passBtn.addEventListener('click', () => {
+             ws.send(JSON.stringify({ action: 'pass' }));
+        });
+
+        startBtn.addEventListener('click', () => {
+             ws.send(JSON.stringify({ action: 'start_game' }));
+        });
+        
+        addBotBtn.addEventListener('click', () => {
+             ws.send(JSON.stringify({ action: 'add_bot' }));
+        });
+
+        document.getElementById('next-game-btn').addEventListener('click', () => {
+             ws.send(JSON.stringify({ action: 'next_game' }));
+        });
+    </script>
+</body>
+</html>

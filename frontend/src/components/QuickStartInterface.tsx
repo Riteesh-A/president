@@ -27,9 +27,9 @@ export function QuickStartInterface({
       
       // Add 3 bots after a short delay
       setTimeout(() => {
-        joinRoom(roomId, 'Bot Alice', true);
-        setTimeout(() => joinRoom(roomId, 'Bot Bob', true), 200);
-        setTimeout(() => joinRoom(roomId, 'Bot Charlie', true), 400);
+        joinRoom(roomId, 'Alice', true);
+        setTimeout(() => joinRoom(roomId, 'Bob', true), 200);
+        setTimeout(() => joinRoom(roomId, 'Charlie', true), 400);
       }, 500);
     }
   };

@@ -1,0 +1,20 @@
+# Testing dependencies for President Card Game
+# Install with: pip install -r test-requirements.txt
+
+# Core testing framework
+pytest>=7.0.0
+
+# HTTP testing
+requests>=2.25.0
+
+# Mock and testing utilities  
+pytest-mock>=3.6.0
+
+# Coverage reporting (optional)
+pytest-cov>=4.0.0
+
+# Dash testing utilities (optional, for advanced testing)
+selenium>=4.0.0
+
+# Performance testing (optional)
+pytest-benchmark>=4.0.0 

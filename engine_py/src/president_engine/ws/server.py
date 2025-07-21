@@ -25,9 +25,9 @@ from ..engine import (
 from ..models import RoomState
 from ..serialization import sanitize_state
 from .events import (
-    parse_inbound_event, create_error_event, create_state_full_event,
-    create_state_patch_event, create_effect_event, create_chat_event,
-    ErrorCode, EventType, JoinEvent, StartEvent, PlayEvent, PassEvent,
+    parse_inbound_event, create_error_event, create_join_success_event,
+    create_state_full_event, create_state_patch_event, create_effect_event, 
+    create_chat_event, ErrorCode, EventType, JoinEvent, StartEvent, PlayEvent, PassEvent,
     GiftSelectEvent, DiscardSelectEvent, ExchangeReturnEvent,
     ExchangeReturnViceEvent, RequestStateEvent, ChatEvent
 )
@@ -218,11 +218,11 @@ async def websocket_endpoint(websocket: WebSocket):
             except ValueError as e:
                 # Invalid event
                 error_event = create_error_event(ErrorCode.INVALID_EVENT, str(e))
-                await websocket.send_text(error_event.json())
+                await websocket.send_text(error_event.model_dump_json())
             except Exception as e:
                 logger.error(f"Error handling event: {e}")
                 error_event = create_error_event(ErrorCode.INTERNAL, "Internal server error")
-                await websocket.send_text(error_event.json())
+                await websocket.send_text(error_event.model_dump_json())
                 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected")
@@ -290,10 +290,14 @@ async def handle_join(websocket: WebSocket, event: JoinEvent) -> Dict:
         if is_bot:
             bots[player_id] = GreedyBot(player_id)
         
+        # Send join success confirmation first
+        join_success_event = create_join_success_event(player_id)
+        await websocket.send_text(join_success_event.model_dump_json())
+        
         # Send full state to the new player
         sanitized_state = sanitize_state(result.state, player_id)
         state_event = create_state_full_event(sanitized_state)
-        await websocket.send_text(state_event.json())
+        await websocket.send_text(state_event.model_dump_json())
         
         # Broadcast state update to other players
         await broadcast_state_update(room_id, result.state, exclude_player=player_id)
@@ -305,7 +309,7 @@ async def handle_join(websocket: WebSocket, event: JoinEvent) -> Dict:
             ErrorCode(result.error_code), 
             result.error_message
         )
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False, "error": result.error_message}
 
 
@@ -316,7 +320,7 @@ async def handle_start(websocket: WebSocket, event: StartEvent) -> Dict:
     
     if not player_id or not room_id or room_id not in rooms:
         error_event = create_error_event(ErrorCode.ACTION_NOT_ALLOWED, "Not in a room")
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
     
     result = start_game(rooms[room_id], event.seed)
@@ -325,8 +329,32 @@ async def handle_start(websocket: WebSocket, event: StartEvent) -> Dict:
         rooms[room_id] = result.state
         await broadcast_state_update(room_id, result.state)
         
-        # Schedule bot actions
-        asyncio.create_task(schedule_bot_actions(room_id))
+        # Schedule bot actions immediately after game start
+        logger.info(f"Game started for room {room_id}, scheduling bot actions immediately")
+        logger.info(f"Starting player: {result.state.turn}")
+        logger.info(f"Starting player name: {result.state.players[result.state.turn].name if result.state.turn else 'None'}")
+        logger.info(f"Starting player is bot: {result.state.players[result.state.turn].is_bot if result.state.turn else 'None'}")
+        
+        # Debug: Show who has 3♦ and who should start
+        logger.info(f"=== GAME START DEBUG ===")
+        logger.info(f"Game phase: {result.state.phase}")
+        logger.info(f"Current turn: {result.state.turn}")
+        if result.state.turn:
+            logger.info(f"Starting player: {result.state.players[result.state.turn].name}")
+            logger.info(f"Starting player is bot: {result.state.players[result.state.turn].is_bot}")
+        
+        for pid, player in result.state.players.items():
+            if "3D" in player.hand:
+                logger.info(f"Player {player.name} (ID: {pid}) has 3♦")
+                if pid != result.state.turn:
+                    logger.warning(f"MISMATCH: {player.name} has 3♦ but {result.state.players[result.state.turn].name} is starting!")
+                else:
+                    logger.info(f"✓ CORRECT: {player.name} has 3♦ and is starting")
+        
+        logger.info(f"=== END GAME START DEBUG ===")
+        
+        # Force immediate bot scheduling
+        await schedule_bot_actions(room_id)
         
         return {"success": True}
     else:
@@ -334,7 +362,7 @@ async def handle_start(websocket: WebSocket, event: StartEvent) -> Dict:
             ErrorCode(result.error_code),
             result.error_message
         )
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
 
 
@@ -345,12 +373,15 @@ async def handle_play(websocket: WebSocket, event: PlayEvent) -> Dict:
     
     if not player_id or not room_id or room_id not in rooms:
         error_event = create_error_event(ErrorCode.ACTION_NOT_ALLOWED, "Not in a room")
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
+    
+    logger.info(f"🎮 Play event from {player_id}: {event.cards}")
     
     result = play_cards(rooms[room_id], player_id, event.cards)
     
     if result.success:
+        logger.info(f"✅ Play successful for {player_id}: {event.cards}")
         rooms[room_id] = result.state
         await broadcast_state_update(room_id, result.state)
         
@@ -359,11 +390,12 @@ async def handle_play(websocket: WebSocket, event: PlayEvent) -> Dict:
         
         return {"success": True}
     else:
+        logger.error(f"❌ Play failed for {player_id}: {result.error_message}")
         error_event = create_error_event(
             ErrorCode(result.error_code),
             result.error_message
         )
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
 
 
@@ -374,7 +406,7 @@ async def handle_pass(websocket: WebSocket, event: PassEvent) -> Dict:
     
     if not player_id or not room_id or room_id not in rooms:
         error_event = create_error_event(ErrorCode.ACTION_NOT_ALLOWED, "Not in a room")
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
     
     result = pass_turn(rooms[room_id], player_id)
@@ -392,7 +424,7 @@ async def handle_pass(websocket: WebSocket, event: PassEvent) -> Dict:
             ErrorCode(result.error_code),
             result.error_message
         )
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
 
 
@@ -403,7 +435,7 @@ async def handle_gift_select(websocket: WebSocket, event: GiftSelectEvent) -> Di
     
     if not player_id or not room_id or room_id not in rooms:
         error_event = create_error_event(ErrorCode.ACTION_NOT_ALLOWED, "Not in a room")
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
     
     # Convert assignments to dict format
@@ -427,7 +459,7 @@ async def handle_gift_select(websocket: WebSocket, event: GiftSelectEvent) -> Di
             ErrorCode(result.error_code),
             result.error_message
         )
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
 
 
@@ -438,7 +470,7 @@ async def handle_discard_select(websocket: WebSocket, event: DiscardSelectEvent)
     
     if not player_id or not room_id or room_id not in rooms:
         error_event = create_error_event(ErrorCode.ACTION_NOT_ALLOWED, "Not in a room")
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
     
     result = submit_discard_selection(rooms[room_id], player_id, event.cards)
@@ -456,7 +488,7 @@ async def handle_discard_select(websocket: WebSocket, event: DiscardSelectEvent)
             ErrorCode(result.error_code),
             result.error_message
         )
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
 
 
@@ -467,7 +499,7 @@ async def handle_exchange_return(websocket: WebSocket, event: ExchangeReturnEven
     
     if not player_id or not room_id or room_id not in rooms:
         error_event = create_error_event(ErrorCode.ACTION_NOT_ALLOWED, "Not in a room")
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
     
     result = submit_exchange_return(rooms[room_id], player_id, event.cards)
@@ -485,7 +517,7 @@ async def handle_exchange_return(websocket: WebSocket, event: ExchangeReturnEven
             ErrorCode(result.error_code),
             result.error_message
         )
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
 
 
@@ -496,7 +528,7 @@ async def handle_exchange_return_vice(websocket: WebSocket, event: ExchangeRetur
     
     if not player_id or not room_id or room_id not in rooms:
         error_event = create_error_event(ErrorCode.ACTION_NOT_ALLOWED, "Not in a room")
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
     
     result = submit_exchange_return(rooms[room_id], player_id, event.cards)
@@ -514,7 +546,7 @@ async def handle_exchange_return_vice(websocket: WebSocket, event: ExchangeRetur
             ErrorCode(result.error_code),
             result.error_message
         )
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
 
 
@@ -525,13 +557,13 @@ async def handle_request_state(websocket: WebSocket, event: RequestStateEvent) -
     
     if not player_id or not room_id or room_id not in rooms:
         error_event = create_error_event(ErrorCode.ACTION_NOT_ALLOWED, "Not in a room")
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
     
     # Send full state
     sanitized_state = sanitize_state(rooms[room_id], player_id)
     state_event = create_state_full_event(sanitized_state)
-    await websocket.send_text(state_event.json())
+    await websocket.send_text(state_event.model_dump_json())
     
     return {"success": True}
 
@@ -543,7 +575,7 @@ async def handle_chat(websocket: WebSocket, event: ChatEvent) -> Dict:
     
     if not player_id or not room_id or room_id not in rooms:
         error_event = create_error_event(ErrorCode.ACTION_NOT_ALLOWED, "Not in a room")
-        await websocket.send_text(error_event.json())
+        await websocket.send_text(error_event.model_dump_json())
         return {"success": False}
     
     # Get player name
@@ -579,8 +611,9 @@ async def broadcast_state_update(room_id: str, new_state: RoomState, exclude_pla
             if old_state is None:
                 # Send full state for first time
                 sanitized_state = sanitize_state(new_state, player_id)
+                logger.info(f"🎮 SENDING FULL STATE to {player_id}: turn={sanitized_state.get('turn')}, phase={sanitized_state.get('phase')}")
                 state_event = create_state_full_event(sanitized_state)
-                await websocket.send_text(state_event.json())
+                await websocket.send_text(state_event.model_dump_json())
             else:
                 # Compute diff
                 diff_ops = compute_diff(old_state, new_state, player_id)
@@ -589,11 +622,11 @@ async def broadcast_state_update(room_id: str, new_state: RoomState, exclude_pla
                     # Send full state if diff is too large
                     sanitized_state = sanitize_state(new_state, player_id)
                     state_event = create_state_full_event(sanitized_state)
-                    await websocket.send_text(state_event.json())
+                    await websocket.send_text(state_event.model_dump_json())
                 else:
                     # Send patch
                     patch_event = create_state_patch_event(new_state.version, diff_ops)
-                    await websocket.send_text(patch_event.json())
+                    await websocket.send_text(patch_event.model_dump_json())
             
             # Store new state for next diff
             player_states[state_key] = new_state
@@ -606,72 +639,139 @@ async def broadcast_state_update(room_id: str, new_state: RoomState, exclude_pla
 async def schedule_bot_actions(room_id: str):
     """Schedule bot actions for a room."""
     if room_id not in rooms:
+        logger.warning(f"Room {room_id} not found in schedule_bot_actions")
         return
-    
+
     state = rooms[room_id]
+    logger.info(f"Scheduling bot actions for room {room_id}")
+    logger.info(f"Current turn: {state.turn}")
+    logger.info(f"Current phase: {state.phase}")
+    logger.info(f"Available bots: {list(bots.keys())}")
+    logger.info(f"Room players: {list(state.players.keys())}")
     
-    # Check if any bot needs to act
+    # Defensive check: if current turn player is a bot but not in bots dict, log error
+    if state.turn and state.turn in state.players:
+        current_player = state.players[state.turn]
+        if current_player.is_bot and state.turn not in bots:
+            logger.error(f"CRITICAL: Current turn player {current_player.name} is a bot but not in bots dict!")
+            # Try to create the missing bot
+            bots[state.turn] = GreedyBot(state.turn)
+            logger.info(f"Created missing bot for {current_player.name}")
+    
+    # Safety check: ensure all bot players have bot instances
+    for player_id, player in state.players.items():
+        if player.is_bot and player_id not in bots:
+            logger.warning(f"Bot player {player.name} missing from bots dict, creating now")
+            bots[player_id] = GreedyBot(player_id)
+    
+    # Simplified bot scheduling logic
+    scheduled_any = False
+    
+    # First priority: current turn player if it's a bot
+    if state.turn and state.turn in state.players and state.players[state.turn].is_bot and state.turn in bots:
+        current_player = state.players[state.turn]
+        if state.phase == "play":
+            logger.info(f"🎯 SCHEDULING: Current turn bot {current_player.name}")
+            asyncio.create_task(execute_bot_action(room_id, state.turn, bots[state.turn]))
+            scheduled_any = True
+    
+    # Second priority: bots with pending effects
     for player_id, player in state.players.items():
         if not player.is_bot or player_id not in bots:
             continue
+            
+        has_pending_gift = (state.pending_gift and state.pending_gift.player_id == player_id)
+        has_pending_discard = (state.pending_discard and state.pending_discard.player_id == player_id)
+        has_exchange_pending = (state.phase == "exchange" and player.role in ["President", "VicePresident"])
         
-        bot = bots[player_id]
-        
-        # Check if it's the bot's turn or they have pending actions
-        needs_action = (
-            (state.turn == player_id and state.phase == "play") or
-            (state.pending_gift and state.pending_gift.player_id == player_id) or
-            (state.pending_discard and state.pending_discard.player_id == player_id) or
-            (state.phase == "exchange" and player_id in [p.id for p in state.players.values() if p.role in ["President", "VicePresident"]])
-        )
-        
-        if needs_action:
-            # Schedule bot action with delay
-            asyncio.create_task(execute_bot_action(room_id, player_id, bot))
+        if has_pending_gift or has_pending_discard or has_exchange_pending:
+            logger.info(f"🎯 SCHEDULING: Bot {player.name} for pending effect (gift={has_pending_gift}, discard={has_pending_discard}, exchange={has_exchange_pending})")
+            asyncio.create_task(execute_bot_action(room_id, player_id, bots[player_id]))
+            scheduled_any = True
+    
+    if not scheduled_any:
+        logger.info(f"No bot actions needed for room {room_id}")
+        if state.turn:
+            current_player = state.players[state.turn]
+            logger.info(f"Current turn: {current_player.name} (bot: {current_player.is_bot})")
+        else:
+            logger.info(f"No current turn player")
 
 
 async def execute_bot_action(room_id: str, player_id: str, bot: GreedyBot):
     """Execute a bot action after a delay."""
-    # Add random delay to simulate thinking
-    import random
-    delay = random.uniform(0.5, 2.0)
-    await asyncio.sleep(delay)
+    # Add small delay to simulate thinking
+    await asyncio.sleep(0.8)
     
-    # Check if room and bot still exist
-    if room_id not in rooms or player_id not in bots:
+    # Double-check everything still exists and is valid
+    if room_id not in rooms:
+        logger.warning(f"Room {room_id} no longer exists")
         return
-    
+        
+    if player_id not in bots:
+        logger.warning(f"Bot {player_id} no longer exists")
+        return
+        
     state = rooms[room_id]
     
-    # Get bot action
+    if player_id not in state.players:
+        logger.warning(f"Player {player_id} not in room state")
+        return
+    
+    player = state.players[player_id]
+    logger.info(f"🤖 Executing action for bot {player.name}")
+    
     try:
+        # Get bot action
         action = bot.choose_action(state)
         if not action:
+            logger.warning(f"Bot {player.name} returned no action")
             return
+        
+        logger.info(f"🤖 Bot {player.name} chose: {action.type}")
         
         # Execute the action
         result = None
         
         if action.type == "play":
-            result = play_cards(state, player_id, action.data["cards"])
+            cards = action.data.get("cards", [])
+            logger.info(f"🤖 Bot {player.name} playing: {cards}")
+            result = play_cards(state, player_id, cards)
         elif action.type == "pass":
+            logger.info(f"🤖 Bot {player.name} passing")
             result = pass_turn(state, player_id)
         elif action.type == "gift":
-            result = submit_gift_distribution(state, player_id, action.data["assignments"])
+            assignments = action.data.get("assignments", [])
+            logger.info(f"🤖 Bot {player.name} gifting")
+            result = submit_gift_distribution(state, player_id, assignments)
         elif action.type == "discard":
-            result = submit_discard_selection(state, player_id, action.data["cards"])
+            cards = action.data.get("cards", [])
+            logger.info(f"🤖 Bot {player.name} discarding: {cards}")
+            result = submit_discard_selection(state, player_id, cards)
         elif action.type == "exchange_return":
-            result = submit_exchange_return(state, player_id, action.data["cards"])
+            cards = action.data.get("cards", [])
+            logger.info(f"🤖 Bot {player.name} returning exchange: {cards}")
+            result = submit_exchange_return(state, player_id, cards)
+        else:
+            logger.error(f"🤖 Bot {player.name} unknown action: {action.type}")
+            return
         
+        # Handle result
         if result and result.success:
+            logger.info(f"✅ Bot {player.name} action successful")
             rooms[room_id] = result.state
             await broadcast_state_update(room_id, result.state)
             
-            # Schedule next bot actions
-            asyncio.create_task(schedule_bot_actions(room_id))
+            # Schedule next bot actions immediately
+            await schedule_bot_actions(room_id)
+        else:
+            error_msg = result.error_message if result else 'No result returned'
+            logger.error(f"❌ Bot {player.name} action failed: {error_msg}")
         
     except Exception as e:
-        logger.error(f"Error executing bot action for {player_id}: {e}")
+        logger.error(f"💥 Error executing bot action for {player.name}: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # Main entry point for module execution

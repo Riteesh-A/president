@@ -111,7 +111,11 @@ class BaseBot(ABC):
         Returns:
             List of valid card combinations that can be played
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         hand = self.get_player_hand(state)
+        
         if not hand:
             return []
         
@@ -132,13 +136,19 @@ class BaseBot(ABC):
         
         valid_plays = []
         
-        # If no current pattern, any group can be played
+        # If no current pattern, only opening player can play
         if current_rank is None:
-            # Opening play - must include 3s
-            if 3 in rank_groups:
-                for count in range(1, len(rank_groups[3]) + 1):
-                    cards = rank_groups[3][:count]
-                    valid_plays.append(cards)
+            # Opening play - only player with 3♦ can start, and must play 3s
+            from ..constants import STARTING_CARD
+            
+            # Check if this bot has the 3♦ (Three of Diamonds)
+            if STARTING_CARD in hand:
+                # This bot has 3♦, so they can play 3s
+                if 3 in rank_groups:
+                    for count in range(1, len(rank_groups[3]) + 1):
+                        cards = rank_groups[3][:count]
+                        valid_plays.append(cards)
+            # If bot doesn't have 3♦, they cannot play on opening
         else:
             # Must match count and be higher rank
             for rank, cards in rank_groups.items():

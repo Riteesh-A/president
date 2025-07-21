@@ -82,11 +82,14 @@ npm run dev
 ## Game Rules
 
 ### Basic Gameplay
-1. Players take turns playing card combinations
-2. Each play must be higher rank than the previous
-3. Players can pass if they cannot or choose not to play
-4. Round ends when all but one player pass
-5. First to empty hand becomes President, last becomes Asshole
+1. **Starting Player**:
+   - **First game**: Player with 3♦ (Three of Diamonds) starts and **must play 3s**
+   - **Subsequent games**: Asshole from previous round starts with any cards
+2. Players take turns playing card combinations
+3. Each play must be higher rank than the previous
+4. Players can pass if they cannot or choose not to play
+5. Round ends when all but one player pass
+6. First to empty hand becomes President, last becomes Asshole
 
 ### Special Effects
 - **Seven Gift (7s)**: Must gift cards equal to number of 7s played

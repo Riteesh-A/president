@@ -187,6 +187,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   playCards: (cards: string[]) => {
+    console.log(`Sending play event: ${cards.join(', ')}`);
     get().sendEvent({
       type: 'play',
       cards
@@ -289,6 +290,10 @@ function handleInboundEvent(
   get: () => GameStore
 ) {
   switch (event.type) {
+    case 'join_success':
+      set({ playerId: event.player_id });
+      break;
+
     case 'state_full':
       set({ gameState: event.state });
       break;
