@@ -708,9 +708,10 @@ def create_main_layout():
     ], fluid=True)
 
 
-def create_game_layout(room: RoomState, pid: str):
+def create_game_layout(room: RoomState, pid: str, selected_cards=None):
     p = room.players.get(pid)
     if not p: return html.Div("Error: Player not found")
+    selected_cards = selected_cards or []
     
     # Determine if it's player's turn
     is_my_turn = (room.turn == pid and room.phase == 'play')
@@ -848,7 +849,7 @@ def create_game_layout(room: RoomState, pid: str):
         
         for c in sorted_hand:
             # Create card buttons that are always selectable
-            hand.append(create_card_element(c, size='normal', selectable=True, selected=False))
+            hand.append(create_card_element(c, size='normal', selectable=True, selected=(c in selected_cards)))
     
     # Action buttons and special prompts
     actions = []
@@ -1033,10 +1034,11 @@ def start_singleplayer(n_single):
 @app.callback(
     Output('game-content', 'children'),
     [Input('current-room', 'data'),
-     Input('current-player', 'data')],
+     Input('current-player', 'data'),
+     Input('selected-cards', 'data')],
     prevent_initial_call=False
 )
-def update_game_display(rid, pid):
+def update_game_display(rid, pid, selected_cards):
     if not rid or not pid:
         return create_mode_select_layout()
     
@@ -1050,19 +1052,22 @@ def update_game_display(rid, pid):
     
     # Bot moves are now handled by the interval callback
     
-    return create_game_layout(room, pid)
+    return create_game_layout(room, pid, selected_cards)
 
 # Removed old bot checker - now using single interval for everything
 
 # Main game progression with bot automation
 @app.callback(
     Output('game-content', 'children', allow_duplicate=True),
+    Output('game-version', 'data', allow_duplicate=True),
     Input('game-updater', 'n_intervals'),
     [State('current-room', 'data'),
-     State('current-player', 'data')],
+     State('current-player', 'data'),
+     State('selected-cards', 'data'),
+     State('game-version', 'data')],
     prevent_initial_call=True
 )
-def update_game_and_trigger_bots(n_intervals, rid, pid):
+def update_game_and_trigger_bots(n_intervals, rid, pid, selected_cards, last_version):
     if not rid or not pid:
         raise dash.exceptions.PreventUpdate
         
@@ -1087,24 +1092,28 @@ def update_game_and_trigger_bots(n_intervals, rid, pid):
                 print(f"[Interval] Bot {current_player.name} making normal move")
                 bot.make_move(rid, room.turn)
     
-    # Always return updated layout
-    return create_game_layout(room, pid)
+    # Only update layout if game version changed
+    if room.version != last_version:
+        return create_game_layout(room, pid, selected_cards), room.version
+    raise dash.exceptions.PreventUpdate
 
 @app.callback(
     [Output('selected-cards','data'),
-     Output({'type':'card-btn','card':ALL},'color')],
+     Output({'type':'card-btn','card':ALL},'color'),
+     Output('game-version', 'data', allow_duplicate=True)],
     [Input({'type':'card-btn','card':ALL},'n_clicks'),
      Input({'type': 'game-btn', 'action': ALL},'n_clicks')],
     [State('selected-cards','data'),
      State({'type':'card-btn','card':ALL},'id'),
      State('current-room','data'),
-     State('current-player','data')],
+     State('current-player','data'),
+     State('game-version', 'data')],
     prevent_initial_call=True
 )
-def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid):
+def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid, last_version):
     ctx = dash.callback_context
     if not ctx.triggered:
-        return selected or [], ['light'] * len(ids or [])
+        return selected or [], ['light'] * len(ids or []), last_version
     
     trig = ctx.triggered[0]['prop_id']
     
@@ -1118,16 +1127,20 @@ def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid)
         else:
             selected = selected + [card]
         colors = [('warning' if id['card'] in selected else 'light') for id in ids]
-        return selected, colors
+        return selected, colors, last_version
     
     # Handle action buttons - all clear selection after action
     elif 'play' in trig and selected and rid and pid:
         engine.play_cards(rid, pid, selected)
-        return [], ['light'] * len(ids or [])
+        room = engine.get_room(rid)
+        updated_version = room.version if room else last_version
+        return [], ['light'] * len(ids or []), updated_version
         
     elif 'pass' in trig and rid and pid:
         engine.pass_turn(rid, pid)
-        return [], ['light'] * len(ids or [])
+        room = engine.get_room(rid)
+        updated_version = room.version if room else last_version
+        return [], ['light'] * len(ids or []), updated_version
         
     elif 'gift' in trig and selected and rid and pid:
         room = engine.get_room(rid)
@@ -1144,7 +1157,8 @@ def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid)
                 room.version += 1
                 room.game_log.append(f"{player.name} gifted {len(to_gift)} cards")
                 engine._advance_turn_if_no_pending(room)
-        return [], ['light'] * len(ids or [])
+                updated_version = room.version
+        return [], ['light'] * len(ids or []), updated_version
         
     elif 'discard' in trig and selected and rid and pid:
         room = engine.get_room(rid)
@@ -1162,19 +1176,21 @@ def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid)
                 room.version += 1
                 room.game_log.append(f"{player.name} discarded {len(to_discard)} cards")
                 engine._advance_turn_if_no_pending(room)
-        return [], ['light'] * len(ids or [])
+                updated_version = room.version
+        return [], ['light'] * len(ids or []), updated_version
     
-    return selected or [], [('warning' if (ids and selected and id['card'] in selected) else 'light') for id in (ids or [])]
+    return selected or [], [('warning' if (ids and selected and id['card'] in selected) else 'light') for id in (ids or [])], last_version
 
 # Separate callback for play button state (only when it exists)
 @app.callback(
     Output({'type': 'game-btn', 'action': 'play'}, 'disabled'),
     Input('selected-cards', 'data'),
     [State('current-room', 'data'),
-     State('current-player', 'data')],
+     State('current-player', 'data'),
+     State('game-version', 'data')],
     prevent_initial_call=True
 )
-def update_play_button(selected, rid, pid):
+def update_play_button(selected, rid, pid, version):
     if not rid or not pid or not selected:
             return True
     
