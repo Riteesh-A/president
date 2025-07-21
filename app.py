@@ -836,23 +836,19 @@ def create_game_layout(room: RoomState, pid: str):
     # Player's hand - SORTED BY GAME ORDER
     hand = []
     if room.phase != 'finished' and p.hand:
-        try:
-            # Sort cards by game rank order: 3,4,5,6,7,8,9,10,J,Q,K,A,2,JOKER
-            def sort_key(card_id):
-                rank, suit = parse_card(card_id)
-                try:
-                    return NORMAL_ORDER.index(rank)
-                except ValueError:
-                    return 999  # Unknown ranks go to the end
-            
-            sorted_hand = sorted(p.hand, key=sort_key)
-            
-            for c in sorted_hand:
-                # Cards will be highlighted via callback state management
-                hand.append(create_card_element(c, size='normal', selectable=is_my_turn, selected=False))
-        except Exception as e:
-            # Fallback - show text representation if card rendering fails
-            hand = [html.Div(f"Card: {c}", style={'padding': '10px', 'border': '1px solid #ccc', 'margin': '2px'}) for c in p.hand[:5]]
+        # Sort cards by game rank order: 3,4,5,6,7,8,9,10,J,Q,K,A,2,JOKER
+        def sort_key(card_id):
+            rank, suit = parse_card(card_id)
+            try:
+                return NORMAL_ORDER.index(rank)
+            except ValueError:
+                return 999  # Unknown ranks go to the end
+        
+        sorted_hand = sorted(p.hand, key=sort_key)
+        
+        for c in sorted_hand:
+            # Create card buttons that are always selectable
+            hand.append(create_card_element(c, size='normal', selectable=True, selected=False))
     
     # Action buttons and special prompts
     actions = []
@@ -952,8 +948,8 @@ def create_game_layout(room: RoomState, pid: str):
     return html.Div([
         dbc.Container([
             dbc.Row([
-                dbc.Col([
-                    info, 
+        dbc.Col([
+            info, 
                     dbc.Card([
                         dbc.CardHeader(html.H5('👥 Players', className='mb-0')), 
                         dbc.CardBody(table)
@@ -966,19 +962,19 @@ def create_game_layout(room: RoomState, pid: str):
                 dbc.Col([
                     pile_display,
                 ], width=6),
-                dbc.Col([
-                    dbc.Card([
+        dbc.Col([
+            dbc.Card([
                                                   dbc.CardHeader([
                               html.H5(f'🃏 {p.name}\'s Hand', className='mb-0'),
                               html.Small(' (YOUR TURN!)' if is_my_turn else ' (waiting...)', 
                                        className='text-success fw-bold' if is_my_turn else 'text-muted')
                           ]), 
-                        dbc.CardBody([
-                            html.Div(special_prompt),
+                dbc.CardBody([
+                    html.Div(special_prompt),
                             selection_info,
                             html.Div(hand, className='mb-3', style={'display': 'flex', 'flexWrap': 'wrap', 'justifyContent': 'center', 'gap': '4px'}) if hand else html.Div("🚫 No cards", className='mb-3 text-center text-muted'), 
                             html.Div(actions, className='text-center')
-                        ])
+                ])
                     ], style={'background': 'rgba(255,255,255,0.95)', 'border': 'none', 'borderRadius': '15px', 'boxShadow': '0 8px 32px rgba(0,0,0,0.1)'})
                 ], width=3)
             ])
@@ -1013,7 +1009,7 @@ def restart_game(n_clicks):
 
 @app.callback(
     [Output('current-room','data'),
-     Output('current-player','data'),
+    Output('current-player','data'),
      Output('mode-info','children'),
      Output('game-version', 'data', allow_duplicate=True)],
     Input('singleplayer-btn', 'n_clicks'),
@@ -1096,139 +1092,79 @@ def update_game_and_trigger_bots(n_intervals, rid, pid):
 
 @app.callback(
     [Output('selected-cards','data'),
-     Output({'type':'card-btn','card':ALL},'color'),
-     Output({'type':'card-btn','card':ALL},'outline'),
-     Output({'type':'card-btn','card':ALL},'style')],
+     Output({'type':'card-btn','card':ALL},'color')],
     [Input({'type':'card-btn','card':ALL},'n_clicks'),
      Input({'type': 'game-btn', 'action': ALL},'n_clicks')],
     [State('selected-cards','data'),
      State({'type':'card-btn','card':ALL},'id'),
      State('current-room','data'),
-     State('current-player','data'),
-     State({'type': 'gift-input', 'player': ALL}, 'value'),
-     State({'type': 'gift-input', 'player': ALL}, 'id')],
+     State('current-player','data')],
     prevent_initial_call=True
 )
-def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid, gift_values, gift_ids):
+def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid):
     ctx = dash.callback_context
     if not ctx.triggered:
-        raise dash.exceptions.PreventUpdate
+        return selected or [], ['light'] * len(ids or [])
     
-    if not rid or not pid:
-        raise dash.exceptions.PreventUpdate
-    
-    room = engine.get_room(rid)
-    if not room:
-        raise dash.exceptions.PreventUpdate
-    
-    # Check if it's the player's turn for card selection
-    is_my_turn = (room.turn == pid and room.phase == 'play') or room.pending_gift or room.pending_discard
-    
-    if not is_my_turn:
-        raise dash.exceptions.PreventUpdate
-    
-    trigger = ctx.triggered[0]
-    trigger_id = trigger['prop_id'].split('.')[0]
-    
-    # Parse trigger
-    try:
-        parsed_id = eval(trigger_id) if trigger_id.startswith('{') else trigger_id
-    except:
-        raise dash.exceptions.PreventUpdate
-    
-    player = room.players.get(pid)
-    if not player:
-        raise dash.exceptions.PreventUpdate
-    
-    selected = selected or []
+    trig = ctx.triggered[0]['prop_id']
     
     # Handle card selection
-    if isinstance(parsed_id, dict) and parsed_id.get('type') == 'card-btn':
-        card_id = parsed_id['card']
-        if card_id in player.hand:
-            if card_id in selected:
-                selected.remove(card_id)
-            else:
-                selected.append(card_id)
+    if 'card-btn' in trig and rid and pid:
+        tid = eval(trig.split('.')[0])
+        card = tid['card']
+        if not selected: selected = []
+        if card in selected:
+            selected = [c for c in selected if c != card]
+        else:
+            selected = selected + [card]
+        colors = [('warning' if id['card'] in selected else 'light') for id in ids]
+        return selected, colors
     
-    # Handle action buttons
-    elif isinstance(parsed_id, dict) and parsed_id.get('type') == 'game-btn':
-        action = parsed_id['action']
+    # Handle action buttons - all clear selection after action
+    elif 'play' in trig and selected and rid and pid:
+        engine.play_cards(rid, pid, selected)
+        return [], ['light'] * len(ids or [])
         
-        if action == 'play' and selected:
-            success, message = engine.play_cards(rid, pid, selected)
-            if success:
-                selected = []
+    elif 'pass' in trig and rid and pid:
+        engine.pass_turn(rid, pid)
+        return [], ['light'] * len(ids or [])
         
-        elif action == 'pass':
-            engine.pass_turn(rid, pid)
-            selected = []
+    elif 'gift' in trig and selected and rid and pid:
+        room = engine.get_room(rid)
+        if room and room.pending_gift and room.pending_gift['player_id'] == pid:
+            required = room.pending_gift['remaining']
+            if len(selected) >= required:
+                to_gift = selected[:required]
+                player = room.players[pid]
+                for card in to_gift:
+                    if card in player.hand:
+                        player.hand.remove(card)
+                player.hand_count = len(player.hand)
+                room.pending_gift = None
+                room.version += 1
+                room.game_log.append(f"{player.name} gifted {len(to_gift)} cards")
+                engine._advance_turn_if_no_pending(room)
+        return [], ['light'] * len(ids or [])
         
-        elif action == 'gift' and room.pending_gift:
-            # Handle gift distribution
-            if not selected:
-                raise dash.exceptions.PreventUpdate
-                
-            # Build distribution from inputs
-            distribution = {}
-            other_players = [pl.id for pl in room.players.values() if pl.id != pid]
-            
-            if gift_values and gift_ids:
-                for i, gift_input_id in enumerate(gift_ids):
-                    player_id = gift_input_id['player']
-                    amount = gift_values[i] or 0
-                    if amount > 0:
-                        distribution[player_id] = amount
-            
-            # Validate total
-            total_gifting = sum(distribution.values())
-            if total_gifting == room.pending_gift['remaining'] and len(selected) == total_gifting:
-                # Distribute cards
-                card_index = 0
-                assignments = []
-                for player_id, count in distribution.items():
-                    cards_for_player = selected[card_index:card_index + count]
-                    assignments.append({'to': player_id, 'cards': cards_for_player})
-                    card_index += count
-                
-                success, message = engine.submit_gift_distribution(rid, pid, assignments)
-                if success:
-                    selected = []
-        
-        elif action == 'discard' and room.pending_discard:
-            if selected and len(selected) <= room.pending_discard['remaining']:
-                success, message = engine.submit_discard_selection(rid, pid, selected)
-                if success:
-                    selected = []
-        
-    # Generate card styles - MUST match the exact cards and order in current layout
-    colors = []
-    outlines = []
-    styles = []
+    elif 'discard' in trig and selected and rid and pid:
+        room = engine.get_room(rid)
+        if room and room.pending_discard and room.pending_discard['player_id'] == pid:
+            required = room.pending_discard['remaining']
+            if len(selected) == required:
+                to_discard = selected
+                player = room.players[pid]
+                for card in to_discard:
+                    if card in player.hand:
+                        player.hand.remove(card)
+                        room.discard.append(card)
+                player.hand_count = len(player.hand)
+                room.pending_discard = None
+                room.version += 1
+                room.game_log.append(f"{player.name} discarded {len(to_discard)} cards")
+                engine._advance_turn_if_no_pending(room)
+        return [], ['light'] * len(ids or [])
     
-    # Use the IDs that were passed to the callback (these match the current layout)
-    if ids:
-        for card_id_dict in ids:
-            card_id = card_id_dict['card'] if isinstance(card_id_dict, dict) else card_id_dict
-            
-            if card_id in selected:
-                colors.append('warning')
-                outlines.append(False)
-                styles.append({
-                    'transform': 'translateY(-8px)',
-                    'boxShadow': '0 8px 16px rgba(255,193,7,0.4)',
-                    'borderColor': '#ffc107',
-                    'borderWidth': '3px'
-                })
-            else:
-                colors.append('light')
-                outlines.append(True)
-                styles.append({})
-    # If no cards in layout, prevent update
-    if not ids:
-        raise dash.exceptions.PreventUpdate
-    
-    return selected, colors, outlines, styles
+    return selected or [], [('warning' if (ids and selected and id['card'] in selected) else 'light') for id in (ids or [])]
 
 # Separate callback for play button state (only when it exists)
 @app.callback(
@@ -1240,7 +1176,7 @@ def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid,
 )
 def update_play_button(selected, rid, pid):
     if not rid or not pid or not selected:
-        return True
+            return True
     
     room = engine.get_room(rid)
     if not room:
