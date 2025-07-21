@@ -51,6 +51,7 @@ class RoomState:
     first_game: bool = True # Add this field
     last_round_winner: Optional[str] = None # Add this field
     first_game_first_play_done: bool = False # Add this field
+    global_asshole_id: Optional[str] = None # Add this field
 
 # ===================== GAME CONSTANTS & UTILS =====================
 
@@ -509,6 +510,9 @@ class PresidentEngine:
             p = room.players[pid]
             room.game_log.append(f"{i+1}. {p.name} - {p.role}")
         room.first_game = False
+        # Set global_asshole_id to the last player in finished_order
+        if room.finished_order:
+            room.global_asshole_id = room.finished_order[-1]
 
     def _format_card(self, card_id: str) -> str:
         rank, suit = parse_card(card_id)
