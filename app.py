@@ -1451,6 +1451,58 @@ def pass_turn(self, room_id: str, player_id: str) -> Tuple[bool, str]:
         return True, "Passed"
 PresidentEngine.pass_turn = pass_turn
 
+# 1. Fix _advance_turn to skip players with no cards
+def _advance_turn(self, room: RoomState):
+    players = sorted(room.players.values(), key=lambda p: p.seat)
+    idx = next((i for i,p in enumerate(players) if p.id == room.turn), 0)
+    n = len(players)
+    for i in range(1, n+1):
+        nxt = players[(idx + i) % n]
+        if nxt.hand and len(nxt.hand) > 0:
+            room.turn = nxt.id
+            return
+PresidentEngine._advance_turn = _advance_turn
+
+# 2. Fix submit_gift_distribution to add cards to recipient's hand and update hand_count
+def submit_gift_distribution(self, room_id: str, player_id: str, assignments: List[dict]) -> Tuple[bool, str]:
+    with self.room_locks[room_id]:
+        room = self.get_room(room_id)
+        if not room: return False, "Room not found"
+        if not room.pending_gift: return False, "No gift pending"
+        if room.pending_gift['player_id'] != player_id: return False, "Not your gift"
+        player = room.players[player_id]
+        total_cards = sum(len(a['cards']) for a in assignments)
+        if total_cards != room.pending_gift['remaining']:
+            return False, f"Must gift exactly {room.pending_gift['remaining']} cards"
+        all_cards = []
+        for assignment in assignments:
+            all_cards.extend(assignment['cards'])
+        for card in all_cards:
+            if card not in player.hand:
+                return False, f"You don't own {card}"
+        # Transfer cards
+        for assignment in assignments:
+            recipient = room.players[assignment['to']]
+            for card in assignment['cards']:
+                player.hand.remove(card)
+                recipient.hand.append(card)
+                recipient.hand_count = len(recipient.hand)
+        player.hand_count = len(player.hand)
+        room.pending_gift = None
+        gift_details = []
+        for assignment in assignments:
+            recipient_name = room.players[assignment['to']].name
+            gift_details.append(f"{len(assignment['cards'])} to {recipient_name}")
+        room.game_log.append(f"{player.name} gifted: {', '.join(gift_details)}")
+        if not self._check_game_end(room):
+            self._advance_turn_if_no_pending(room)
+        room.version += 1
+        return True, "Gift distributed successfully"
+PresidentEngine.submit_gift_distribution = submit_gift_distribution
+
+# 3. In the UI, never show 'YOUR TURN' for a player with no cards
+# (This is already handled by checking if p.hand is not empty in the UI logic for is_my_turn and hand display)
+
 # ===================== RUN SERVER =====================
 if __name__=='__main__':
     app.run(debug=True)
