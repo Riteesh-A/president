@@ -414,6 +414,7 @@ class PresidentEngine:
                 if p.id not in room.finished_order:
                     room.finished_order.append(p.id)
                     room.game_log.append(f"{p.name} finished LAST - Asshole!")
+                    assign_roles_dynamic(room)
             self._end_game(room)
             return True
         return False
@@ -1497,7 +1498,7 @@ def play_cards(self, room_id: str, player_id: str, card_ids: List[str]) -> Tuple
         if not room.inversion_active and (pattern['rank'] == 2 or pattern['rank'] == 'JOKER'):
             auto_win = True
             room.game_log.append(f"{player.name} played {pattern['rank']} - automatic round win!")
-        elif room.inversion_active and pattern['rank'] == 3:
+        elif room.inversion_active and (pattern['rank'] == 3 or pattern['rank'] == 'JOKER'):
             auto_win = True
             room.game_log.append(f"{player.name} played 3 during inversion - automatic round win!")
         if auto_win:
