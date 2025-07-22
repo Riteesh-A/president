@@ -166,7 +166,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   // Game actions
   joinRoom: (roomId: string, playerName: string, isBot = false) => {
-    console.log(`Joining room: ${roomId} as ${playerName} (bot: ${isBot})`);
+    console.log(`🏠 Joining room: ${roomId} as ${playerName} (bot: ${isBot})`);
+    const { connectionState, playerId } = get();
+    
+    if (connectionState.status !== 'connected') {
+      console.error('❌ Cannot join room - not connected');
+      toast.error('Not connected to server');
+      return;
+    }
+    
+    console.log(`📤 Current playerId before join: ${playerId}`);
+    
     get().sendEvent({
       type: 'join',
       room_id: roomId,
@@ -176,6 +186,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     
     if (isBot) {
       toast.success(`Adding ${playerName} to the game...`);
+    } else {
+      toast.success(`Joining as ${playerName}...`);
     }
   },
 
@@ -187,7 +199,40 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   playCards: (cards: string[]) => {
-    console.log(`Sending play event: ${cards.join(', ')}`);
+    const { gameState, playerId } = get();
+    console.log(`🎮 PLAY DEBUG:`, {
+      cards,
+      playerId,
+      currentTurn: gameState?.turn,
+      phase: gameState?.phase,
+      isMyTurn: gameState?.turn === playerId,
+      selectedCardsCount: cards.length
+    });
+    if (cards.includes('3D')) {
+      console.log('[DEBUG] Attempting to play 3D!');
+    }
+    
+    if (!gameState || !playerId) {
+      console.error('❌ Cannot play - no game state or player ID');
+      return;
+    }
+    
+    if (gameState.turn !== playerId) {
+      console.error('❌ Cannot play - not your turn');
+      return;
+    }
+    
+    if (gameState.phase !== 'play') {
+      console.error('❌ Cannot play - wrong phase:', gameState.phase);
+      return;
+    }
+    
+    if (cards.length === 0) {
+      console.error('❌ Cannot play - no cards selected');
+      return;
+    }
+    
+    console.log(`✅ Sending play event: ${cards.join(', ')}`);
     get().sendEvent({
       type: 'play',
       cards
@@ -291,10 +336,13 @@ function handleInboundEvent(
 ) {
   switch (event.type) {
     case 'join_success':
+      console.log(`✅ Join success! Setting playerId to: ${event.player_id}`);
       set({ playerId: event.player_id });
       break;
 
     case 'state_full':
+      console.log(`🎮 State update received. Current playerId: ${get().playerId}`);
+      console.log(`🎮 Players in game:`, Object.entries(event.state.players).map(([id, p]) => ({ id, name: p.name })));
       set({ gameState: event.state });
       break;
 

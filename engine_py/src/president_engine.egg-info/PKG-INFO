@@ -11,7 +11,6 @@ Requires-Dist: uvicorn[standard]>=0.24.0
 Requires-Dist: websockets>=12.0
 Requires-Dist: pydantic>=2.5.0
 Requires-Dist: pydantic-settings>=2.1.0
-Requires-Dist: redis[hiredis]>=5.0.1
 Requires-Dist: orjson>=3.9.10
 Requires-Dist: python-multipart>=0.0.6
 Provides-Extra: dev

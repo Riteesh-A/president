@@ -1,0 +1,2 @@
+[console_scripts]
+president-server = president_engine.start:main

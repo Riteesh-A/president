@@ -1,37 +1,31 @@
+name: president-game-backend
 services:
-  - name: president-engine
+  - name: api
     type: web
-    git:
-      repository: github.com/yourusername/president-engine
-      branch: main
-      workdir: engine_py
-    build:
-      type: dockerfile
-      dockerfile: Dockerfile
-    instance:
-      type: free
+    source:
+      git:
+        branch: main
+        build_command: |
+          cd engine_py &&
+          pip install -e .
+        run_command: |
+          cd engine_py &&
+          python -m uvicorn src.president_engine.main:app --host 0.0.0.0 --port $PORT
     ports:
       - port: 8000
         protocol: http
-    health_checks:
-      - path: /health
-        port: 8000
-        protocol: http
-        initial_delay: 10
-        timeout: 5
-        interval: 30
-        retries: 3
-    scaling:
-      min: 0  # Scale to zero when not in use
-      max: 1  # Free tier limit
     env:
-      - name: LOG_LEVEL
-        value: info
-      - name: MAX_ROOMS
-        value: "500"
-      - name: CORS_ORIGINS
-        value: "*"
-    # Uncomment and set if using Redis for persistence
-    # secrets:
-    #   - name: REDIS_URL
-    #     value: "redis://username:password@host:port/database" 
+      - key: PORT
+        value: "8000"
+      - key: PYTHONPATH
+        value: "/app/engine_py/src"
+    health_check:
+      http:
+        path: /health
+        port: 8000
+    instance_type: nano
+    autoscaling:
+      min: 1
+      max: 3
+    regions:
+      - was 

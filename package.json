@@ -1,0 +1,28 @@
+{
+  "name": "president-game",
+  "version": "1.0.0",
+  "description": "Multiplayer President card game",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd engine_py && pip install -e . && python -m uvicorn src.president_engine.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:frontend": "cd frontend && npm install && cross-env NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws npm run dev",
+    "install:all": "cd engine_py && pip install -e . && cd ../frontend && npm install",
+    "build:frontend": "cd frontend && npm run build",
+    "start:frontend": "cd frontend && npm start",
+    "test": "python test_deployment.py"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3"
+  },
+  "keywords": [
+    "card-game",
+    "multiplayer",
+    "president",
+    "websocket",
+    "react",
+    "fastapi"
+  ],
+  "author": "President Game Developer",
+  "license": "MIT"
+} 

@@ -1,51 +1,35 @@
-"""
-Game constants and configurations.
-"""
+"""Game constants and utilities"""
 
-from typing import Literal
+from typing import List, Tuple, Optional
+from .models import Rank
 
-# Rank types
-Rank = int | Literal['J', 'Q', 'K', 'A', 2, 'JOKER']
+NORMAL_ORDER = [3,4,5,6,7,8,9,10,'J','Q','K','A',2,'JOKER']
+SUITS = ['S', 'H', 'D', 'C']
 
-# Standard rank ordering (lowest to highest)
-NORMAL_ORDER: list[Rank] = [3, 4, 5, 6, 7, 8, 9, 10, 'J', 'Q', 'K', 'A', 2, 'JOKER']
+def create_deck(use_jokers=True) -> List[str]:
+    deck = []
+    for suit in SUITS:
+        for rank in [3,4,5,6,7,8,9,10,'J','Q','K','A',2]:
+            deck.append(f"{rank}{suit}")
+    if use_jokers:
+        deck.extend(['JOKERa', 'JOKERb'])
+    return deck
 
-# Suit definitions
-SUITS = ['S', 'H', 'D', 'C']  # Spades, Hearts, Diamonds, Clubs
+def parse_card(card_id: str) -> Tuple[Rank, Optional[str]]:
+    if card_id.startswith('JOKER'):
+        return 'JOKER', None
+    if card_id[:-1] in ['J', 'Q', 'K', 'A']:
+        return card_id[:-1], card_id[-1]
+    if card_id[:-1] == '10':
+        return 10, card_id[-1]
+    return int(card_id[:-1]), card_id[-1]
 
-# Special cards
-STARTING_CARD = "3D"  # Three of Diamonds
-JOKER_CARDS = ["JOKERa", "JOKERb"]
+def compare_ranks(rank_a: Rank, rank_b: Rank, inversion=False) -> int:
+    order = list(reversed(NORMAL_ORDER)) if inversion else NORMAL_ORDER
+    try:
+        return order.index(rank_a) - order.index(rank_b)
+    except ValueError:
+        return 0
 
-# Game phases
-PHASE_LOBBY = "lobby"
-PHASE_DEALING = "dealing"
-PHASE_EXCHANGE = "exchange"
-PHASE_PLAY = "play"
-PHASE_FINISHED = "finished"
-
-# Player roles
-ROLE_PRESIDENT = "President"
-ROLE_VICE_PRESIDENT = "VicePresident"
-ROLE_CITIZEN = "Citizen"
-ROLE_SCUMBAG = "Scumbag"
-ROLE_ASSHOLE = "Asshole"
-
-# Effect types
-EFFECT_SEVEN_GIFT = "seven_gift"
-EFFECT_EIGHT_RESET = "eight_reset"
-EFFECT_TEN_DISCARD = "ten_discard"
-EFFECT_JACK_INVERSION = "jack_inversion"
-
-# Error codes
-ERROR_ROOM_FULL = "ROOM_FULL"
-ERROR_NOT_YOUR_TURN = "NOT_YOUR_TURN"
-ERROR_OWNERSHIP = "OWNERSHIP"
-ERROR_PATTERN_MISMATCH = "PATTERN_MISMATCH"
-ERROR_RANK_TOO_LOW = "RANK_TOO_LOW"
-ERROR_EFFECT_PENDING = "EFFECT_PENDING"
-ERROR_INVALID_GIFT_DISTRIBUTION = "INVALID_GIFT_DISTRIBUTION"
-ERROR_INVALID_DISCARD_SELECTION = "INVALID_DISCARD_SELECTION"
-ERROR_ALREADY_PASSED = "ALREADY_PASSED"
-ERROR_ACTION_NOT_ALLOWED = "ACTION_NOT_ALLOWED"
-ERROR_INTERNAL = "INTERNAL" 
+def is_higher_rank(rank_a: Rank, rank_b: Rank, inversion=False) -> bool:
+    return compare_ranks(rank_a, rank_b, inversion) > 0 

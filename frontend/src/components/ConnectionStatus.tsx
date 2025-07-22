@@ -1,112 +1,61 @@
 'use client';
 
-import { useState } from 'react';
-import { Wifi, WifiOff, AlertCircle, Loader2 } from 'lucide-react';
+import { useGameStore } from '@/store/gameStore';
+import { Wifi, WifiOff, AlertCircle, Loader } from 'lucide-react';
 
-interface ConnectionStatusProps {
-  status: 'disconnected' | 'connecting' | 'connected' | 'error';
-  error?: string;
-  onConnect: () => void;
-  onDisconnect: () => void;
-  wsUrl: string;
-  onWsUrlChange: (url: string) => void;
-}
-
-export function ConnectionStatus({ 
-  status, 
-  error, 
-  onConnect, 
-  onDisconnect, 
-  wsUrl, 
-  onWsUrlChange 
-}: ConnectionStatusProps) {
-  const [showSettings, setShowSettings] = useState(false);
-
-  const getStatusColor = () => {
-    switch (status) {
-      case 'connected': return 'text-green-600';
-      case 'connecting': return 'text-yellow-600';
-      case 'error': return 'text-red-600';
-      default: return 'text-gray-600';
-    }
-  };
+export function ConnectionStatus() {
+  const { connectionState, gameState } = useGameStore();
 
   const getStatusIcon = () => {
-    switch (status) {
-      case 'connected': 
-        return <Wifi className="h-5 w-5" />;
-      case 'connecting': 
-        return <Loader2 className="h-5 w-5 animate-spin" />;
-      case 'error': 
-        return <AlertCircle className="h-5 w-5" />;
-      default: 
-        return <WifiOff className="h-5 w-5" />;
+    switch (connectionState.status) {
+      case 'connected':
+        return <Wifi className="h-4 w-4 text-green-400" />;
+      case 'connecting':
+        return <Loader className="h-4 w-4 text-yellow-400 animate-spin" />;
+      case 'error':
+        return <AlertCircle className="h-4 w-4 text-red-400" />;
+      default:
+        return <WifiOff className="h-4 w-4 text-gray-400" />;
     }
   };
 
   const getStatusText = () => {
-    switch (status) {
-      case 'connected': return 'Connected';
-      case 'connecting': return 'Connecting...';
-      case 'error': return 'Connection Error';
-      default: return 'Disconnected';
+    switch (connectionState.status) {
+      case 'connected':
+        return gameState ? `Connected • Room ${gameState.id}` : 'Connected';
+      case 'connecting':
+        return 'Connecting...';
+      case 'error':
+        return `Error: ${connectionState.error || 'Connection failed'}`;
+      default:
+        return 'Disconnected';
     }
   };
 
+  const getStatusColor = () => {
+    switch (connectionState.status) {
+      case 'connected':
+        return 'bg-green-500/20 border-green-500/30 text-green-300';
+      case 'connecting':
+        return 'bg-yellow-500/20 border-yellow-500/30 text-yellow-300';
+      case 'error':
+        return 'bg-red-500/20 border-red-500/30 text-red-300';
+      default:
+        return 'bg-gray-500/20 border-gray-500/30 text-gray-300';
+    }
+  };
+
+  // Only show if there's a connection issue or we're in a game
+  if (connectionState.status === 'connected' && !gameState) {
+    return null;
+  }
+
   return (
-    <div className="card p-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <div className={getStatusColor()}>
-            {getStatusIcon()}
-          </div>
-          <div>
-            <div className="font-medium">{getStatusText()}</div>
-            {error && (
-              <div className="text-sm text-red-600">{error}</div>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={() => setShowSettings(!showSettings)}
-            className="btn-secondary text-sm"
-          >
-            Settings
-          </button>
-          
-          {status === 'connected' ? (
-            <button onClick={onDisconnect} className="btn-error">
-              Disconnect
-            </button>
-          ) : (
-            <button 
-              onClick={onConnect} 
-              className="btn-primary"
-              disabled={!wsUrl || status === 'connecting'}
-            >
-              Connect
-            </button>
-          )}
-        </div>
+    <div className="fixed top-4 right-4 z-50">
+      <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-sm ${getStatusColor()}`}>
+        {getStatusIcon()}
+        <span className="text-sm font-medium">{getStatusText()}</span>
       </div>
-
-      {showSettings && (
-        <div className="mt-4 pt-4 border-t border-gray-200">
-          <div className="flex items-center space-x-2">
-            <label className="font-medium text-sm">WebSocket URL:</label>
-            <input
-              type="text"
-              value={wsUrl}
-              onChange={(e) => onWsUrlChange(e.target.value)}
-              className="input flex-1 text-sm"
-              placeholder="ws://localhost:8000/ws"
-              disabled={status === 'connected'}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 } 

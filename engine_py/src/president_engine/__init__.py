@@ -1,5 +1,3 @@
-"""
-President Engine - Multiplayer President card game implementation.
-"""
+"""President Card Game Engine - Multiplayer Backend"""
 
 __version__ = "1.0.0" 
