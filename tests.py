@@ -214,8 +214,46 @@ class PresidentGameTests:
         print("\n🧪 Test 2: Joker Wildcard Functionality")
         print("-" * 40)
         
-        # Test 2.1: 7 + Joker acts as pair of 7s (gift effect)
+        # Test 2.1: Single joker acts as 2 (auto-win)
         room = self.setup_test_room("test_joker_wildcard_1")
+        player_ids = list(room.players.keys())
+        player1_id = player_ids[0]
+        
+        # Give player1 only a joker
+        room.players[player1_id].hand = ['JOKERa']
+        room.players[player1_id].hand_count = 1
+        
+        # Set up single card pile
+        room.current_pile = ['KH']
+        room.current_rank = 'K'
+        room.current_count = 1
+        room.turn = player1_id
+        
+        # Play single joker
+        success, msg = self.engine.play_cards("test_joker_wildcard_1", player1_id, ['JOKERa'])
+        self.assert_test(success and "Auto-win" in msg, "Single joker acts as 2 and triggers auto-win")
+        
+        # Test 2.2: Two jokers act as pair of 2s (auto-win)
+        room = self.setup_test_room("test_joker_wildcard_2")
+        player_ids = list(room.players.keys())
+        player1_id = player_ids[0]
+        
+        # Give player1 two jokers
+        room.players[player1_id].hand = ['JOKERa', 'JOKERb']
+        room.players[player1_id].hand_count = 2
+        
+        # Set up pair pile
+        room.current_pile = ['AH', 'AD']
+        room.current_rank = 'A'
+        room.current_count = 2
+        room.turn = player1_id
+        
+        # Play two jokers
+        success, msg = self.engine.play_cards("test_joker_wildcard_2", player1_id, ['JOKERa', 'JOKERb'])
+        self.assert_test(success and "Auto-win" in msg, "Two jokers act as pair of 2s and trigger auto-win")
+        
+        # Test 2.3: 7 + Joker acts as pair of 7s (gift effect)
+        room = self.setup_test_room("test_joker_wildcard_3")
         player_ids = list(room.players.keys())
         player1_id = player_ids[0]
         
@@ -231,28 +269,48 @@ class PresidentGameTests:
         room.turn = player1_id
         
         # Play 7 + Joker
-        success, msg = self.engine.play_cards("test_joker_wildcard_1", player1_id, [sevens[0], jokers[0]])
+        success, msg = self.engine.play_cards("test_joker_wildcard_3", player1_id, [sevens[0], jokers[0]])
         self.assert_test(success and room.pending_gift is not None, "7 + Joker triggers gift effect")
         
-        # Test 2.2: 9 + Joker acts as pair of 9s (no effect)
-        room = self.setup_test_room("test_joker_wildcard_2")
+        # Test 2.4: 10 + Joker acts as pair of 10s (discard effect)
+        room = self.setup_test_room("test_joker_wildcard_4")
         player_ids = list(room.players.keys())
         player1_id = player_ids[0]
         
-        # Add 9 and joker
-        room.players[player1_id].hand.extend(['9H', 'JOKERa'])
-        nines = [c for c in room.players[player1_id].hand if parse_card(c)[0] == 9]
+        # Add 10 and joker
+        room.players[player1_id].hand.extend(['10H', 'JOKERa'])
+        tens = [c for c in room.players[player1_id].hand if parse_card(c)[0] == 10]
         jokers = [c for c in room.players[player1_id].hand if parse_card(c)[0] == 'JOKER']
         
-        # Set up pair of 8s
-        room.current_pile = ['8H', '8D']
-        room.current_rank = 8
+        # Set up pair of 9s
+        room.current_pile = ['9H', '9D']
+        room.current_rank = 9
         room.current_count = 2
         room.turn = player1_id
         
-        # Play 9 + Joker
-        success, msg = self.engine.play_cards("test_joker_wildcard_2", player1_id, [nines[0], jokers[0]])
-        self.assert_test(success and room.pending_gift is None, "9 + Joker has no special effect")
+        # Play 10 + Joker
+        success, msg = self.engine.play_cards("test_joker_wildcard_4", player1_id, [tens[0], jokers[0]])
+        self.assert_test(success and room.pending_discard is not None, "10 + Joker triggers discard effect")
+        
+        # Test 2.5: 6 + Joker acts as pair of 6s (no effect)
+        room = self.setup_test_room("test_joker_wildcard_5")
+        player_ids = list(room.players.keys())
+        player1_id = player_ids[0]
+        
+        # Add 6 and joker
+        room.players[player1_id].hand.extend(['6H', 'JOKERa'])
+        sixes = [c for c in room.players[player1_id].hand if parse_card(c)[0] == 6]
+        jokers = [c for c in room.players[player1_id].hand if parse_card(c)[0] == 'JOKER']
+        
+        # Set up pair of 5s
+        room.current_pile = ['5H', '5D']
+        room.current_rank = 5
+        room.current_count = 2
+        room.turn = player1_id
+        
+        # Play 6 + Joker
+        success, msg = self.engine.play_cards("test_joker_wildcard_5", player1_id, [sixes[0], jokers[0]])
+        self.assert_test(success and room.pending_gift is None and room.pending_discard is None, "6 + Joker has no special effect")
     
     def test_last_card_effects(self):
         """Test 3: 7s and 10s as last card (no effect applied)"""

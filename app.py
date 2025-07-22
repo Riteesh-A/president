@@ -384,17 +384,20 @@ class PresidentEngine:
             
             # Determine effective rank for jokers
             effective_rank = pattern['rank']
-            if pattern['rank'] == 'JOKER':
-                if room.current_rank is None:
-                    # First play - joker acts as 3
-                    effective_rank = 3
+            jokers_played = any(parse_card(c)[0] == 'JOKER' for c in card_ids)
+            regular_cards = [c for c in card_ids if parse_card(c)[0] != 'JOKER']
+            
+            if jokers_played:
+                if len(regular_cards) == 0:
+                    # Only jokers played - they act as 2 (or 3 during inversion)
+                    if room.inversion_active:
+                        effective_rank = 3
+                    else:
+                        effective_rank = 2
                 else:
-                    # Determine what rank the joker should act as to beat current rank
-                    effective_rank = determine_joker_effective_rank(room.current_rank, room.inversion_active)
-            elif 'JOKER' in [parse_card(c)[0] for c in card_ids]:
-                # Mixed play with jokers - jokers act as the same rank as regular cards
-                # effective_rank is already set to the regular card rank
-                pass
+                    # Mixed play - jokers assume the rank of the regular cards
+                    regular_rank = parse_card(regular_cards[0])[0]
+                    effective_rank = regular_rank
             
             # Mark first play of first game as done
             if getattr(room, 'first_game', True) and not getattr(room, 'first_game_first_play_done', False) and room.current_rank is None:
@@ -431,22 +434,23 @@ class PresidentEngine:
             
             # Check for automatic round win (2, JOKER, or 3 during inversion)
             auto_win = False
-            # Check if any jokers were played (jokers are always auto-win)
-            jokers_played = any(parse_card(c)[0] == 'JOKER' for c in card_ids)
             
-            # Auto-win if playing the absolute highest rank or if jokers were played
-            if not room.inversion_active and (effective_rank == 2 or jokers_played):
+            # Auto-win if playing the absolute highest rank
+            if not room.inversion_active and effective_rank == 2:
                 auto_win = True
-                if jokers_played:
-                    room.game_log.append(f"{player.name} played Joker - automatic round win!")
-                else:
-                    room.game_log.append(f"{player.name} played {effective_rank} - automatic round win!")
-            elif room.inversion_active and (effective_rank == 3 or jokers_played):
+                room.game_log.append(f"{player.name} played {effective_rank} - automatic round win!")
+            elif room.inversion_active and effective_rank == 3:
                 auto_win = True
-                if jokers_played:
-                    room.game_log.append(f"{player.name} played Joker during inversion - automatic round win!")
-                else:
-                    room.game_log.append(f"{player.name} played 3 during inversion - automatic round win!")
+                room.game_log.append(f"{player.name} played {effective_rank} during inversion - automatic round win!")
+            
+            # Check if player finished this turn (before auto-win return)
+            finished_this_turn = False
+            if len(player.hand) == 0:
+                if player_id not in room.finished_order:
+                    room.finished_order.append(player_id)
+                    room.game_log.append(f"{player.name} finished in position {len(room.finished_order)}!")
+                    assign_roles_dynamic(room)
+                finished_this_turn = True
             
             if auto_win:
                 # Save round before clearing
@@ -464,14 +468,6 @@ class PresidentEngine:
                 room.game_log.append(f"{player.name} starts new round after auto-win")
                 room.last_round_winner = player_id  # Set last_round_winner
                 return True, "Auto-win! New round started"
-            finished_this_turn = False
-            if len(player.hand) == 0:
-                if player_id not in room.finished_order:
-                    room.finished_order.append(player_id)
-                    room.game_log.append(f"{player.name} finished in position {len(room.finished_order)}!")
-                    assign_roles_dynamic(room)
-                finished_this_turn = True
-            
             # Check if game ended due to player finishing
             game_ended = False
             if finished_this_turn:
@@ -746,21 +742,20 @@ class PresidentEngine:
             return True, "Passed"
 
     def _end_game(self, room: RoomState):
+        # Add any remaining players to finished_order if they haven't been added yet
         for p in room.players.values():
-            if p.id not in room.finished_order and p.hand:
+            if p.id not in room.finished_order and len(p.hand) == 0:
                 room.finished_order.append(p.id)
-        n = len(room.players)
-        if n == 3:
-            roles = ['President', 'Vice President', 'Asshole']
-        elif n == 4:
-            roles = ['President', 'Vice President', 'Scumbag', 'Asshole']
-        else:  # 5 players
-            roles = ['President', 'Vice President', 'Citizen', 'Scumbag', 'Asshole']
-        for i, pid in enumerate(room.finished_order):
-            if i < len(roles):
-                room.players[pid].role = roles[i]
-            else:
-                room.players[pid].role = None
+                room.game_log.append(f"{p.name} finished LAST - Asshole!")
+        
+        # Ensure all players are in finished_order (in case some still have cards)
+        for p in room.players.values():
+            if p.id not in room.finished_order:
+                room.finished_order.append(p.id)
+        
+        # Use assign_roles_dynamic to ensure consistent role assignment
+        assign_roles_dynamic(room)
+        
         room.phase = 'finished'
         room.game_log.append("Game finished!")
         for i, pid in enumerate(room.finished_order):
