@@ -47,6 +47,9 @@ class PresidentGameTests:
         # Test 8: Bot discard/gift behavior
         self.test_bot_effects()
         
+        # Test 9: Card exchange between roles
+        self.test_card_exchange()
+        
         print("=" * 50)
         print(f"📊 Test Results: {self.passed_tests} passed, {self.failed_tests} failed out of {self.test_count} total tests")
         
@@ -311,6 +314,27 @@ class PresidentGameTests:
         # Play 6 + Joker
         success, msg = self.engine.play_cards("test_joker_wildcard_5", player1_id, [sixes[0], jokers[0]])
         self.assert_test(success and room.pending_gift is None and room.pending_discard is None, "6 + Joker has no special effect")
+        
+        # Test 2.6: 2 + Joker on King pair (the actual issue from UI)
+        room = self.setup_test_room("test_joker_wildcard_6")
+        player_ids = list(room.players.keys())
+        player1_id = player_ids[0]
+        
+        # Give player 2 and joker
+        room.players[player1_id].hand = ['2H', 'JOKERa']
+        room.players[player1_id].hand_count = 2
+        room.turn = player1_id
+        room.phase = 'play'
+        
+        # Set up King pair pile
+        room.current_pile = ['KH', 'KD']
+        room.current_rank = 'K'
+        room.current_count = 2
+        room.first_game = False
+        
+        # 2 + Joker should act as pair of 2s and beat King pair
+        success, msg = self.engine.play_cards("test_joker_wildcard_6", player1_id, ['2H', 'JOKERa'])
+        self.assert_test(success, "2 + Joker on King pair should be valid")
     
     def test_last_card_effects(self):
         """Test 3: 7s and 10s as last card (no effect applied)"""
@@ -462,6 +486,7 @@ class PresidentGameTests:
         print("\n🧪 Test 7: Bot Behavior")
         print("-" * 25)
         
+        # Test 7.1: Basic bot continuation
         room = self.setup_test_room("test_bots")
         player_ids = list(room.players.keys())
         
@@ -480,6 +505,91 @@ class PresidentGameTests:
         # Check that game continues
         self.assert_test(room.phase == 'play', "Game continues after human finishes")
         self.assert_test(room.turn == player_ids[1], "Turn passes to bot after human finishes")
+        
+        # Test 7.2: Human finishes during play, bots continue
+        room2 = self.setup_test_room("test_bots_play")
+        player_ids2 = list(room2.players.keys())
+        
+        # Make player1 human, others bots
+        room2.players[player_ids2[0]].is_bot = False
+        room2.players[player_ids2[1]].is_bot = True
+        room2.players[player_ids2[2]].is_bot = True
+        room2.players[player_ids2[3]].is_bot = True
+        
+        # Give human only 1 card, bots have multiple cards
+        room2.players[player_ids2[0]].hand = ['3D']  # Use 3D for first play
+        room2.players[player_ids2[0]].hand_count = 1
+        room2.players[player_ids2[1]].hand = ['3H', '4H', '5H']
+        room2.players[player_ids2[1]].hand_count = 3
+        room2.players[player_ids2[2]].hand = ['6H', '7H', '8H']
+        room2.players[player_ids2[2]].hand_count = 3
+        room2.players[player_ids2[3]].hand = ['9H', '10H', 'JH']
+        room2.players[player_ids2[3]].hand_count = 3
+        
+        # Set up room for play (not first game to avoid 3D requirement)
+        room2.phase = 'play'
+        room2.first_game = False
+        room2.first_game_first_play_done = True
+        room2.current_pile = []
+        room2.current_rank = None
+        room2.current_count = None
+        room2.turn = player_ids2[0]
+        
+        # Human plays their last card
+        ok, msg = self.engine.play_cards("test_bots_play", player_ids2[0], ['3D'])
+        self.assert_test(ok, "Human successfully plays last card")
+        
+        # Check that human finished
+        self.assert_test(player_ids2[0] in room2.finished_order, "Human added to finished order")
+        self.assert_test(len(room2.players[player_ids2[0]].hand) == 0, "Human has no cards left")
+        
+        # Check that turn advanced to next player (should be a bot)
+        self.assert_test(room2.turn in player_ids2[1:], "Turn advanced to a bot")
+        
+        # Test 7.3: Verify that turn advanced to a bot after human finished
+        # The key point is that the turn should have advanced from the human to a bot
+        # We don't need to test the bot's actual move, just that the turn system works
+        self.assert_test(room2.turn in player_ids2[1:], "Turn advanced to a bot after human finished")
+        
+        # Test 7.4: Verify that turn advances even when human finishes with no effects
+        room3 = self.setup_test_room("test_bots_finish_no_effects")
+        player_ids3 = list(room3.players.keys())
+
+        # Make player1 human, others bots
+        room3.players[player_ids3[0]].is_bot = False
+        room3.players[player_ids3[1]].is_bot = True
+        room3.players[player_ids3[2]].is_bot = True
+        room3.players[player_ids3[3]].is_bot = True
+
+        # Give human only 1 card (a 6, which has no special effects)
+        room3.players[player_ids3[0]].hand = ['6D']
+        room3.players[player_ids3[0]].hand_count = 1
+        room3.players[player_ids3[1]].hand = ['3H', '4H', '5H']
+        room3.players[player_ids3[1]].hand_count = 3
+        room3.players[player_ids3[2]].hand = ['7H', '8H', '9H']
+        room3.players[player_ids3[2]].hand_count = 3
+        room3.players[player_ids3[3]].hand = ['10H', 'JH', 'QH']
+        room3.players[player_ids3[3]].hand_count = 3
+
+        # Set up room for play
+        room3.phase = 'play'
+        room3.first_game = False
+        room3.first_game_first_play_done = True
+        room3.current_pile = []
+        room3.current_rank = None
+        room3.current_count = None
+        room3.turn = player_ids3[0]
+
+        # Human plays their last card (6D) - no special effects
+        ok, msg = self.engine.play_cards("test_bots_finish_no_effects", player_ids3[0], ['6D'])
+        self.assert_test(ok, "Human successfully plays last card with no effects")
+
+        # Check that human finished
+        self.assert_test(player_ids3[0] in room3.finished_order, "Human added to finished order")
+        self.assert_test(len(room3.players[player_ids3[0]].hand) == 0, "Human has no cards left")
+
+        # Check that turn advanced to next player (should be a bot)
+        self.assert_test(room3.turn in player_ids3[1:], "Turn advanced to a bot after human finished with no effects")
     
     def test_bot_effects(self):
         """Test 8: Bots handle 7s and 10s effects correctly"""
@@ -533,6 +643,227 @@ class PresidentGameTests:
         
         # Check that bot handled the discard correctly
         self.assert_test(room.pending_discard is None, "Bot correctly handles 10s discard effect")
+        
+        # Test 8.3: Bot correctly handles 7s gift effect and gives cards to any player
+        # Create a room with 3 players to test random distribution
+        # Use the global engine that the bot uses
+        from app import engine as global_engine
+        room2 = global_engine.create_room("test_bot_gift")
+        global_engine.add_player("test_bot_gift", "Human1", is_bot=False)
+        global_engine.add_player("test_bot_gift", "Bot1", is_bot=True)
+        global_engine.add_player("test_bot_gift", "Human2", is_bot=False)
+        global_engine.start_game("test_bot_gift")
+        room2 = global_engine.get_room("test_bot_gift")
+        player_ids2 = list(room2.players.keys())
+        
+        # Make player1 human, player2 bot, player3 human
+        room2.players[player_ids2[0]].is_bot = False
+        room2.players[player_ids2[1]].is_bot = True
+        room2.players[player_ids2[2]].is_bot = False
+        
+        # Clear hands and give bot 7 and other cards, humans some cards
+        room2.players[player_ids2[1]].hand = ['7H', '3H', '4H', '5H', '6H']
+        room2.players[player_ids2[1]].hand_count = 5
+        room2.players[player_ids2[0]].hand = ['8H', '9H']
+        room2.players[player_ids2[0]].hand_count = 2
+        room2.players[player_ids2[2]].hand = ['10H', 'JH']
+        room2.players[player_ids2[2]].hand_count = 2
+        
+        # Set up pending gift for bot (must gift 2 cards)
+        room2.pending_gift = {'player_id': player_ids2[1], 'remaining': 2}
+        room2.turn = player_ids2[1]
+        
+        # Bot should handle gift
+        bot._handle_gift("test_bot_gift", player_ids2[1], 2)
+        
+        # Get the updated room from engine
+        room2 = global_engine.get_room("test_bot_gift")
+        
+        # Check that bot gave 2 cards to any player(s)
+        self.assert_test(len(room2.players[player_ids2[1]].hand) == 3, "Bot correctly gave away 2 cards")
+        # Check that at least one player received cards (total cards should be distributed)
+        total_cards_received = len(room2.players[player_ids2[0]].hand) + len(room2.players[player_ids2[2]].hand) - 4  # Subtract original 4 cards
+        self.assert_test(total_cards_received == 2, "Cards were distributed to players")
+        self.assert_test(room2.pending_gift is None, "Pending gift cleared after bot handled it")
+        
+        # Test 8.4: Bot gives worst cards when gifting
+        # Create a room with 3 players to test random distribution
+        room3 = global_engine.create_room("test_bot_gift_worst")
+        global_engine.add_player("test_bot_gift_worst", "Human1", is_bot=False)
+        global_engine.add_player("test_bot_gift_worst", "Bot1", is_bot=True)
+        global_engine.add_player("test_bot_gift_worst", "Human2", is_bot=False)
+        global_engine.start_game("test_bot_gift_worst")
+        room3 = global_engine.get_room("test_bot_gift_worst")
+        player_ids3 = list(room3.players.keys())
+        
+        # Make player1 human, player2 bot, player3 human
+        room3.players[player_ids3[0]].is_bot = False
+        room3.players[player_ids3[1]].is_bot = True
+        room3.players[player_ids3[2]].is_bot = False
+        
+        # Clear hands and give bot mixed cards (3, 4, 5, 6, 7, 8, 9, 10, J, Q, K, A, 2)
+        room3.players[player_ids3[1]].hand = ['3H', '4H', '5H', '6H', '7H', '8H', '9H', '10H', 'JH', 'QH', 'KH', 'AH', '2H']
+        room3.players[player_ids3[1]].hand_count = 13
+        room3.players[player_ids3[0]].hand = ['8D', '9D']
+        room3.players[player_ids3[0]].hand_count = 2
+        room3.players[player_ids3[2]].hand = ['10D', 'JD']
+        room3.players[player_ids3[2]].hand_count = 2
+        
+        # Set up pending gift for bot (must gift 3 cards)
+        room3.pending_gift = {'player_id': player_ids3[1], 'remaining': 3}
+        room3.turn = player_ids3[1]
+        
+        # Bot should handle gift
+        bot._handle_gift("test_bot_gift_worst", player_ids3[1], 3)
+        
+        # Get the updated room from engine
+        room3 = global_engine.get_room("test_bot_gift_worst")
+        
+        # Check that bot gave 3 worst cards to any player(s)
+        self.assert_test(len(room3.players[player_ids3[1]].hand) == 10, "Bot correctly gave away 3 cards")
+        # Check that cards were distributed (total cards received should be 3)
+        total_cards_received = len(room3.players[player_ids3[0]].hand) + len(room3.players[player_ids3[2]].hand) - 4  # Subtract original 4 cards
+        self.assert_test(total_cards_received == 3, "Cards were distributed to players")
+        
+        # Verify the bot gave the worst cards (3, 4, 5) to some player
+        all_received_cards = []
+        all_received_cards.extend(room3.players[player_ids3[0]].hand)
+        all_received_cards.extend(room3.players[player_ids3[2]].hand)
+        received_ranks = [parse_card(c)[0] for c in all_received_cards]
+        self.assert_test(3 in received_ranks, "Bot gave 3 to a player")
+        self.assert_test(4 in received_ranks, "Bot gave 4 to a player")
+        self.assert_test(5 in received_ranks, "Bot gave 5 to a player")
+        
+        # Verify the bot kept better cards (should not have 3, 4, 5 anymore)
+        bot_cards = [parse_card(c)[0] for c in room3.players[player_ids3[1]].hand]
+        self.assert_test(3 not in bot_cards, "Bot kept better cards (no 3)")
+        self.assert_test(4 not in bot_cards, "Bot kept better cards (no 4)")
+        self.assert_test(5 not in bot_cards, "Bot kept better cards (no 5)")
+        
+        self.assert_test(room3.pending_gift is None, "Pending gift cleared after bot handled it")
+
+    def test_card_exchange(self):
+        """Test 9: Card exchange between roles at start of next game"""
+        print("\n🧪 Test 9: Card Exchange")
+        print("-" * 25)
+        
+        # Test 9.1: Simulate first game ending and roles assigned
+        room = self.setup_test_room("test_exchange_1")
+        player_ids = list(room.players.keys())
+        
+        # Simulate first game end with roles
+        room.finished_order = [player_ids[0], player_ids[1], player_ids[2], player_ids[3]]
+        room.phase = 'finished'
+        room.first_game = False  # Mark as not first game
+        
+        # Assign roles
+        from app import assign_roles_dynamic
+        assign_roles_dynamic(room)
+        
+        # Test 9.2: Simulate restart process (like clicking "New Game" button)
+        # First, simulate the restart callback logic
+        room.phase = 'lobby'
+        room.finished_order = []
+        room.game_log = []
+        
+        # Clear hands but preserve roles for card exchange
+        for player in room.players.values():
+            player.hand = []
+            player.hand_count = 0
+            player.passed = False
+        
+        # Start new game
+        self.engine.start_game("test_exchange_1")
+        room = self.engine.get_room("test_exchange_1")
+        
+        # Now simulate the restart callback logic for card exchange
+        if room and not room.first_game and any(p.role for p in room.players.values()):
+            self.engine._start_card_exchange(room)
+        
+        room = self.engine.get_room("test_exchange_1")
+        
+        self.assert_test(room.exchange_phase, "Card exchange phase started at beginning of new game")
+        self.assert_test(room.pending_exchange['current_exchange'] == 'asshole_to_president', "Asshole must give cards to President first")
+        
+        # Test 9.3: Asshole submits 2 best cards
+        asshole_id = player_ids[3]
+        president_id = player_ids[0]
+        
+        # Give asshole some cards to exchange
+        room.players[asshole_id].hand = ['2H', 'AH', 'KH', '7D']  # Asshole has good cards
+        room.players[asshole_id].hand_count = 4
+        
+        # Asshole should give 2H and AH (best cards)
+        ok, msg = self.engine.submit_asshole_cards("test_exchange_1", asshole_id, ['2H', 'AH'])
+        self.assert_test(ok, "Asshole successfully gives 2 best cards to President")
+        
+        # Check cards were transferred
+        self.assert_test('2H' in room.players[president_id].hand, "President received 2H from Asshole")
+        self.assert_test('AH' in room.players[president_id].hand, "President received AH from Asshole")
+        self.assert_test('2H' not in room.players[asshole_id].hand, "Asshole no longer has 2H")
+        self.assert_test('AH' not in room.players[asshole_id].hand, "Asshole no longer has AH")
+        
+        # Test 9.4: President gives 2 cards to Asshole
+        # Give president some additional cards to give to asshole
+        room.players[president_id].hand.extend(['3H', '4H', '5H'])
+        
+        # President should give 2 of his own cards (not the ones he received from asshole)
+        # He has: 2H, AH (from asshole) + 3H, 4H, 5H (his own)
+        ok, msg = self.engine.submit_president_cards("test_exchange_1", president_id, ['3H', '4H'])
+        self.assert_test(ok, "President successfully gives 2 cards to Asshole")
+        
+        # Check cards were transferred
+        self.assert_test('3H' in room.players[asshole_id].hand, "Asshole received 3H from President")
+        self.assert_test('4H' in room.players[asshole_id].hand, "Asshole received 4H from President")
+        # Check that President no longer has the specific cards they gave away
+        president_hand = room.players[president_id].hand
+        self.assert_test('3H' not in president_hand, "President no longer has 3H")
+        self.assert_test('4H' not in president_hand, "President no longer has 4H")
+        
+        # Test 9.5: Scumbag gives best card to Vice President
+        scumbag_id = player_ids[2]
+        vice_president_id = player_ids[1]
+        
+        # Give scumbag some cards
+        room.players[scumbag_id].hand = ['QH', 'JH', '10H']
+        room.players[scumbag_id].hand_count = 3
+        
+        ok, msg = self.engine.submit_scumbag_card("test_exchange_1", scumbag_id, 'QH')
+        self.assert_test(ok, "Scumbag successfully gives best card to Vice President")
+        
+        # Check card was transferred
+        self.assert_test('QH' in room.players[vice_president_id].hand, "Vice President received QH from Scumbag")
+        self.assert_test('QH' not in room.players[scumbag_id].hand, "Scumbag no longer has QH")
+        
+        # Test 9.6: Vice President gives 1 card to Scumbag
+        # Give vice president some additional cards to give to scumbag
+        room.players[vice_president_id].hand.extend(['6H', '7H'])
+        
+        ok, msg = self.engine.submit_vice_president_card("test_exchange_1", vice_president_id, '6H')
+        self.assert_test(ok, "Vice President successfully gives 1 card to Scumbag")
+        
+        # Check card was transferred
+        self.assert_test('6H' in room.players[scumbag_id].hand, "Scumbag received 6H from Vice President")
+        # Note: Vice President should no longer have 6H, but he might have received QH from scumbag
+        # So we check that he doesn't have 6H specifically
+        vice_president_hand = room.players[vice_president_id].hand
+        self.assert_test('6H' not in vice_president_hand, "Vice President no longer has 6H")
+        
+        # Test 9.7: Exchange phase is completed and game transitions to play phase
+        self.assert_test(not room.exchange_phase, "Card exchange phase completed")
+        self.assert_test(room.pending_exchange is None, "Pending exchange cleared")
+        self.assert_test(room.phase == 'play', "Game transitions to play phase after exchange")
+        
+        # Test 9.8: First game should not have card exchange
+        room2 = self.setup_test_room("test_exchange_first_game")
+        room2.first_game = True  # Ensure it's marked as first game
+        
+        # Start first game
+        self.engine.start_game("test_exchange_first_game")
+        room2 = self.engine.get_room("test_exchange_first_game")
+        
+        self.assert_test(not room2.exchange_phase, "First game should not have card exchange phase")
+        self.assert_test(room2.phase == 'play', "First game should go directly to play phase")
 
 if __name__ == "__main__":
     tests = PresidentGameTests()
