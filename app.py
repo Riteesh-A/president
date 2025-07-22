@@ -778,7 +778,7 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
     selected_cards = selected_cards or []
     
     # Determine if it's player's turn
-    is_my_turn = (room.turn == pid and room.phase == 'play')
+    is_my_turn = (room.turn == pid and room.phase == 'play' and p.hand)
     
     # Game info card
     info = dbc.Card([
@@ -976,7 +976,7 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
                 html.P("2. Choose how many to give each player:", className='mb-2'),
                 html.Div(gift_ui, className='mb-3'),
                 html.Div(id='gift-total-display', className='mb-2'),
-                dbc.Button('Confirm Gift Distribution', id={'type': 'game-btn', 'action': 'gift'}, color='warning', className='me-2'),
+                dbc.Button('Confirm Gift Distribution', id={'type': 'game-btn', 'action': 'gift'}, color='warning', className='me-2', disabled=not p.hand),
             ], color='warning', className='mb-3')
         ]
     elif room.pending_discard and room.pending_discard['player_id'] == pid:
@@ -984,7 +984,7 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
             dbc.Alert([
                 html.H5(f"🗑️ Discard {room.pending_discard['remaining']} cards!", className="mb-2"),
                 html.P("Select cards from your hand and click Discard", className='mb-2'),
-                dbc.Button('Discard Selected Cards', id={'type': 'game-btn', 'action': 'discard'}, color='danger', className='me-2'),
+                dbc.Button('Discard Selected Cards', id={'type': 'game-btn', 'action': 'discard'}, color='danger', className='me-2', disabled=not p.hand),
             ], color='danger', className='mb-3')
         ]
     elif is_my_turn:
@@ -994,8 +994,8 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
                 html.P("Select cards and click Play, or Pass your turn", className='text-center mb-0')
             ], color='success', className='mb-3'),
             dbc.ButtonGroup([
-                dbc.Button('🎯 Play Cards', id={'type': 'game-btn', 'action': 'play'}, color='primary'),
-                dbc.Button('⏭️ Pass', id={'type': 'game-btn', 'action': 'pass'}, color='secondary')
+                dbc.Button('🎯 Play Cards', id={'type': 'game-btn', 'action': 'play'}, color='primary', disabled=not p.hand),
+                dbc.Button('⏭️ Pass', id={'type': 'game-btn', 'action': 'pass'}, color='secondary', disabled=not p.hand)
             ], className='d-grid')
         ]
     
@@ -1147,13 +1147,10 @@ def update_game_and_trigger_bots(n_intervals, rid, pid, selected_cards, last_ver
             
             # Handle pending effects first
             if room.pending_gift and room.pending_gift['player_id'] == room.turn:
-                print(f"[Interval] Bot {current_player.name} handling gift")
                 bot._handle_gift(rid, room.turn, room.pending_gift['remaining'])
             elif room.pending_discard and room.pending_discard['player_id'] == room.turn:
-                print(f"[Interval] Bot {current_player.name} handling discard")
                 bot._handle_discard(rid, room.turn, room.pending_discard['remaining'])
             else:
-                print(f"[Interval] Bot {current_player.name} making normal move")
                 bot.make_move(rid, room.turn)
     
     # Only update layout if game version changed
@@ -1171,10 +1168,12 @@ def update_game_and_trigger_bots(n_intervals, rid, pid, selected_cards, last_ver
      State({'type':'card-btn','card':ALL},'id'),
      State('current-room','data'),
      State('current-player','data'),
-     State('game-version', 'data')],
+     State('game-version', 'data'),
+     State({'type': 'gift-input', 'player': ALL}, 'value'),
+     State({'type': 'gift-input', 'player': ALL}, 'id')],
     prevent_initial_call=True
 )
-def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid, last_version):
+def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid, last_version, gift_values=None, gift_ids=None):
     ctx = dash.callback_context
     if not ctx.triggered:
         return selected or [], ['light'] * len(ids or []), last_version
@@ -1208,20 +1207,26 @@ def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid,
         
     elif 'gift' in trig and selected and rid and pid:
         room = engine.get_room(rid)
+        updated_version = last_version
         if room and room.pending_gift and room.pending_gift['player_id'] == pid:
             required = room.pending_gift['remaining']
-            if len(selected) >= required:
-                to_gift = selected[:required]
-                player = room.players[pid]
-                for card in to_gift:
-                    if card in player.hand:
-                        player.hand.remove(card)
-                player.hand_count = len(player.hand)
-                room.pending_gift = None
-                room.version += 1
-                room.game_log.append(f"{player.name} gifted {len(to_gift)} cards")
-                engine._advance_turn_if_no_pending(room)
-                updated_version = room.version
+            # Build assignments from gift_values and gift_ids
+            if gift_values is not None and gift_ids is not None:
+                # Map player_id to number of cards
+                assignments = []
+                total = 0
+                selected_cards_for_assignment = selected.copy() # Use a copy to avoid modifying selected directly
+                for val, gid in zip(gift_values, gift_ids):
+                    num = val or 0
+                    if num > 0:
+                        give_cards = selected_cards_for_assignment[:num]
+                        selected_cards_for_assignment = selected_cards_for_assignment[num:]
+                        assignments.append({'to': gid['player'], 'cards': give_cards})
+                        total += num
+                if total == required:
+                    ok, msg = engine.submit_gift_distribution(rid, pid, assignments)
+                    room = engine.get_room(rid)
+                    updated_version = room.version if room else last_version
         return [], ['light'] * len(ids or []), updated_version
         
     elif 'discard' in trig and selected and rid and pid:
