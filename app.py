@@ -159,11 +159,12 @@ class PresidentEngine:
                     starter = players[0].id
                 room.turn = starter
             else:
-                # Asshole from previous game starts
+                # Asshole from previous game starts (last in finished_order)
                 asshole_id = None
-                if room.finished_order:
+                if hasattr(room, 'global_asshole_id') and room.global_asshole_id in room.players:
+                    asshole_id = room.global_asshole_id
+                elif room.finished_order:
                     asshole_id = room.finished_order[-1]
-                    print(f"Asshole from previous game: {asshole_id}")
                 if asshole_id and asshole_id in room.players:
                     room.turn = asshole_id
                 else:
@@ -865,17 +866,18 @@ def create_mode_select_layout():
                 dbc.Button("Multiplayer (coming soon)", id="multiplayer-btn", color="secondary", size="lg", disabled=True),
             ], width="auto")
         ], justify="center", className="mb-4"),
-        dcc.Store(id='player-name', data=''),
         html.Div(id="mode-info")
     ], fluid=True)
 
 def create_main_layout():
     return dbc.Container([
+        dcc.Store(id='player-name', data=''),
         dcc.Store(id='current-room', data=None),
         dcc.Store(id='current-player', data=None),
         dcc.Store(id='selected-cards', data=[]),
-        dcc.Store(id='game-version', data=0),  # Track game state version
-        dcc.Interval(id='game-updater', interval=1000, n_intervals=0),  # Main game progression
+        dcc.Store(id='game-version', data=0),
+        dcc.Store(id='play-error', data=''),
+        dcc.Interval(id='game-updater', interval=1000, n_intervals=0),
         html.Div(id='game-content')
     ], fluid=True)
 
@@ -1057,11 +1059,10 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
         ]
     elif room.pending_gift and room.pending_gift['player_id'] == pid:
         # Enhanced 7-gift UI - choose recipients and distribute cards unevenly (e.g. 2 to bot1, 1 to bot2)
-        other_players = [pl for pl in room.players.values() if pl.id != pid]
-        
+        # Only show as recipients those who are not in finished_order and have cards
+        other_players = [pl for pl in room.players.values() if pl.id != pid and pl.id not in room.finished_order and pl.hand_count > 0]
         gift_ui = []
         remaining = room.pending_gift['remaining']
-        
         # Add recipient selection UI
         for other_player in other_players:
             gift_ui.append(html.Div([
@@ -1076,7 +1077,6 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
                     style={'width': '80px'}
                 )
             ], className='mb-2'))
-        
         special_prompt = [
             dbc.Alert([
                 html.H5(f"🎁 Gift {remaining} cards total!", className="mb-3"),
@@ -1118,7 +1118,17 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
                className='text-center mb-0 text-muted small')
     ])
     
+    # Add error modal
+    error_modal = dbc.Modal([
+        dbc.ModalHeader("Invalid Play"),
+        dbc.ModalBody(dcc.Store(id='play-error-modal-msg', data='')), # Placeholder, will be set by callback
+        dbc.ModalFooter(
+            dbc.Button("Close", id="close-play-error-modal", className="ms-auto", n_clicks=0)
+        )
+    ], id="play-error-modal", is_open=False)
+    
     return html.Div([
+        error_modal,
         dbc.Container([
             dbc.Row([
         dbc.Col([
@@ -1160,18 +1170,19 @@ app.layout = create_main_layout()
      Output('current-player','data', allow_duplicate=True),
      Output('game-version', 'data', allow_duplicate=True)],
     Input('restart-btn', 'n_clicks'),
+    State('player-name', 'data'),
     prevent_initial_call=True
 )
-def restart_game(n_clicks):
+def restart_game(n_clicks, player_name):
     if n_clicks:
         # Create new game
         rid = f'singleplayer_{uuid.uuid4().hex[:8]}'
         engine.create_room(rid)
-        ok, pid = engine.add_player(rid, "You")
+        name = player_name.strip().title() if player_name and player_name.strip() else 'You'
+        ok, pid = engine.add_player(rid, name)
         for i in range(3):
             engine.add_player(rid, BOT_NAMES[i], True)
         engine.start_game(rid)
-        
         room = engine.get_room(rid)
         return rid, pid, room.version if room else 0
     return dash.no_update, dash.no_update, dash.no_update
@@ -1274,7 +1285,8 @@ def update_game_and_trigger_bots(n_intervals, rid, pid, selected_cards, last_ver
 @app.callback(
     [Output('selected-cards','data'),
      Output({'type':'card-btn','card':ALL},'color'),
-     Output('game-version', 'data', allow_duplicate=True)],
+     Output('game-version', 'data', allow_duplicate=True),
+     Output('play-error', 'data')],
     [Input({'type':'card-btn','card':ALL},'n_clicks'),
      Input({'type': 'game-btn', 'action': ALL},'n_clicks')],
     [State('selected-cards','data'),
@@ -1289,7 +1301,7 @@ def update_game_and_trigger_bots(n_intervals, rid, pid, selected_cards, last_ver
 def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid, last_version, gift_values=None, gift_ids=None):
     ctx = dash.callback_context
     if not ctx.triggered:
-        return selected or [], ['light'] * len(ids or []), last_version
+        return selected or [], ['light'] * len(ids or []), last_version, ''
     
     trig = ctx.triggered[0]['prop_id']
     
@@ -1303,20 +1315,22 @@ def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid,
         else:
             selected = selected + [card]
         colors = [('warning' if id['card'] in selected else 'light') for id in ids]
-        return selected, colors, last_version
+        return selected, colors, last_version, ''
     
     # Handle action buttons - all clear selection after action
     elif 'play' in trig and selected and rid and pid:
-        engine.play_cards(rid, pid, selected)
+        ok, msg = engine.play_cards(rid, pid, selected)
         room = engine.get_room(rid)
         updated_version = room.version if room else last_version
-        return [], ['light'] * len(ids or []), updated_version
+        if not ok:
+            return selected, ['light'] * len(ids or []), updated_version, msg
+        return [], ['light'] * len(ids or []), updated_version, ''
         
     elif 'pass' in trig and rid and pid:
         engine.pass_turn(rid, pid)
         room = engine.get_room(rid)
         updated_version = room.version if room else last_version
-        return [], ['light'] * len(ids or []), updated_version
+        return [], ['light'] * len(ids or []), updated_version, ''
         
     elif 'gift' in trig and selected and rid and pid:
         room = engine.get_room(rid)
@@ -1340,7 +1354,7 @@ def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid,
                     ok, msg = engine.submit_gift_distribution(rid, pid, assignments)
                     room = engine.get_room(rid)
                     updated_version = room.version if room else last_version
-        return [], ['light'] * len(ids or []), updated_version
+        return [], ['light'] * len(ids or []), updated_version, ''
         
     elif 'discard' in trig and selected and rid and pid:
         room = engine.get_room(rid)
@@ -1359,32 +1373,71 @@ def handle_all_card_actions(card_clicks, action_clicks, selected, ids, rid, pid,
                 room.game_log.append(f"{player.name} discarded {len(to_discard)} cards")
                 engine._advance_turn_if_no_pending(room)
                 updated_version = room.version
-        return [], ['light'] * len(ids or []), updated_version
+        return [], ['light'] * len(ids or []), updated_version, ''
     
-    return selected or [], [('warning' if (ids and selected and id['card'] in selected) else 'light') for id in (ids or [])], last_version
+    return selected or [], [('warning' if (ids and selected and id['card'] in selected) else 'light') for id in (ids or [])], last_version, ''
 
 # Separate callback for play button state (only when it exists)
 @app.callback(
     Output({'type': 'game-btn', 'action': 'play'}, 'disabled'),
-    Input('selected-cards', 'data'),
+    [Input('selected-cards', 'data'),
+     Input('game-version', 'data')],
     [State('current-room', 'data'),
-     State('current-player', 'data'),
-     State('game-version', 'data')],
+     State('current-player', 'data')],
     prevent_initial_call=True
 )
-def update_play_button(selected, rid, pid, version):
-    if not rid or not pid or not selected:
-            return True
-    
+def update_play_button(selected, version, rid, pid):
+    if not rid or not pid:
+        return True
     room = engine.get_room(rid)
     if not room:
         return True
-    
-    # Enable play button if cards are selected and it's player's turn (not during gift/discard)
-    if room.turn == pid and room.phase == 'play' and not room.pending_gift and not room.pending_discard:
-        return False
-    
-    return True
+    player = room.players.get(pid)
+    if not player or not player.hand:
+        return True
+    # If there are pending gifts/discards, keep disabled
+    if room.pending_gift or room.pending_discard:
+        return True
+    # Check if any valid play exists
+    hand = player.hand
+    valid_play_exists = False
+    if room.current_rank is None:
+        # Any set of same rank is valid (except first play of first game)
+        if getattr(room, 'first_game', True) and not getattr(room, 'first_game_first_play_done', False):
+            threes = [c for c in hand if parse_card(c)[0] == 3]
+            if threes:
+                valid_play_exists = True
+        else:
+            rank_groups = {}
+            for card in hand:
+                rank = parse_card(card)[0]
+                if rank not in rank_groups:
+                    rank_groups[rank] = []
+                rank_groups[rank].append(card)
+            for cards in rank_groups.values():
+                if cards:
+                    valid_play_exists = True
+                    break
+    else:
+        groups = defaultdict(list)
+        for c in hand:
+            r,_ = parse_card(c)
+            groups[r].append(c)
+        for rank, cards in groups.items():
+            if len(cards) >= room.current_count:
+                play = cards[:room.current_count]
+                ok,_,_ = engine.validate_play(room, pid, play)
+                if ok:
+                    valid_play_exists = True
+                    break
+    if not valid_play_exists:
+        return True
+    # If cards are selected, still check if the selected play is valid
+    if selected:
+        ok,_,_ = engine.validate_play(room, pid, selected)
+        if not ok:
+            return True
+    return False
 
 
 
@@ -1604,6 +1657,11 @@ def submit_gift_distribution(self, room_id: str, player_id: str, assignments: Li
         for card in all_cards:
             if card not in player.hand:
                 return False, f"You don't own {card}"
+        # Validate recipients: must not be in finished_order and must have cards
+        for assignment in assignments:
+            recipient = room.players[assignment['to']]
+            if assignment['to'] in room.finished_order or recipient.hand_count == 0:
+                return False, f"Cannot gift to finished player: {recipient.name}"
         # Transfer cards
         for assignment in assignments:
             recipient = room.players[assignment['to']]
@@ -1626,6 +1684,19 @@ PresidentEngine.submit_gift_distribution = submit_gift_distribution
 
 # 3. In the UI, never show 'YOUR TURN' for a player with no cards
 # (This is already handled by checking if p.hand is not empty in the UI logic for is_my_turn and hand display)
+
+@app.callback(
+    [Output('play-error-modal', 'is_open'), Output('play-error-modal-msg', 'data')],
+    [Input('play-error', 'data'), Input('close-play-error-modal', 'n_clicks')],
+    [State('play-error-modal', 'is_open')],
+    prevent_initial_call=True
+)
+def toggle_play_error_modal(error_msg, close_clicks, is_open):
+    if error_msg:
+        return True, error_msg
+    if close_clicks:
+        return False, ''
+    return is_open, ''
 
 # ===================== RUN SERVER =====================
 if __name__=='__main__':
