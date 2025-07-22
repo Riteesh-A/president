@@ -129,6 +129,8 @@ class PresidentEngine:
             room.phase = 'dealing'
             room.finished_order = []
             room.game_log = []
+
+            # Create deck and deal cards
             deck = create_deck(True)
             random.shuffle(deck)
             players = list(room.players.values())
@@ -141,10 +143,12 @@ class PresidentEngine:
                 player.hand = deck[start_idx:end_idx]
                 player.hand_count = len(player.hand)
                 player.passed = False
-            # 3. Set first_game flag
+
+            # Set first_game flag
             if not hasattr(room, 'first_game'):
                 room.first_game = True
-            # 4. Set starter
+
+            # Set starter
             if room.first_game:
                 starter = None
                 for player in players:
@@ -159,6 +163,7 @@ class PresidentEngine:
                 asshole_id = None
                 if room.finished_order:
                     asshole_id = room.finished_order[-1]
+                    print(f"Asshole from previous game: {asshole_id}")
                 if asshole_id and asshole_id in room.players:
                     room.turn = asshole_id
                 else:
@@ -176,6 +181,18 @@ class PresidentEngine:
             return True, "Game started!"
     
     def validate_play(self, room: RoomState, player_id: str, card_ids: List[str]) -> Tuple[bool, str, Optional[dict]]:
+        """
+        Validate a play of cards by a player.
+        Args:
+            room: The current room state
+            player_id: The ID of the player making the play
+            card_ids: The IDs of the cards being played
+        Returns:
+            Tuple[bool, str, Optional[dict]]: A tuple containing:
+                - bool: True if the play is valid, False otherwise
+                - str: An error message if the play is invalid, or "Valid play" if it is valid
+                - Optional[dict]: A dictionary containing the rank, count, and effect of the play if it is valid, None otherwise
+        """
         player = room.players.get(player_id)
         if not player:
             return False, "Player not found", None
@@ -192,6 +209,7 @@ class PresidentEngine:
         regular_ranks = [r for r in ranks if r != 'JOKER']
         joker_count = ranks.count('JOKER')
         
+        # Check if all non-Joker cards are the same rank
         if len(set(regular_ranks)) > 1:
             return False, "All non-Joker cards must be same rank", None
         
@@ -213,18 +231,30 @@ class PresidentEngine:
                     return False, "First play of the game must be 3s", None
             effect = self._get_effect_type(play_rank)
             return True, "Valid play", {'rank': play_rank, 'count': play_count, 'effect': effect}
+        
+        # Check if play count matches current count
         if play_count != room.current_count:
             return False, f"Must play exactly {room.current_count} cards", None
+        # Check if play rank is higher than current rank
         if not is_higher_rank(play_rank, room.current_rank, room.inversion_active):
             return False, f"Must play higher than {room.current_rank}", None
+        # Check if play rank is valid after Jack inversion
         if room.inversion_active and room.current_rank == 'J':
             pre_jack_ranks = [3,4,5,6,7,8,9,10]
             if play_rank not in pre_jack_ranks:
                 return False, "After Jack inversion, only lower ranks (3-10) allowed", None
+        # Get effect type for the play
         effect = self._get_effect_type(play_rank)
         return True, "Valid play", {'rank': play_rank, 'count': play_count, 'effect': effect}
 
     def _get_effect_type(self, rank) -> Optional[str]:
+        """
+        Get the effect type for a given rank.
+        Args:
+            rank: The rank of the card
+        Returns:
+            Optional[str]: The effect type if the rank has an effect, None otherwise
+        """
         if rank == 7: return 'seven_gift'
         if rank == 8: return 'eight_reset'
         if rank == 10: return 'ten_discard'
@@ -232,7 +262,12 @@ class PresidentEngine:
         return None
 
     def _save_completed_round(self, room: RoomState, reason: str):
-        """Save the current round to completed rounds history"""
+        """
+        Save the current round to completed rounds history
+        Args:
+            room: The current room state
+            reason: The reason for saving the round
+        """
         if room.round_history:
             round_data = {
                 'round_number': len(room.completed_rounds) + 1,
@@ -243,6 +278,17 @@ class PresidentEngine:
             room.completed_rounds.append(round_data)
 
     def play_cards(self, room_id: str, player_id: str, card_ids: List[str]) -> Tuple[bool, str]:
+        """
+        Play cards by a player.
+        Args:
+            room_id: The ID of the room
+            player_id: The ID of the player making the play
+            card_ids: The IDs of the cards being played
+        Returns:
+            Tuple[bool, str]: A tuple containing:
+                - bool: True if the play is successful, False otherwise
+                - str: A message indicating the result of the play
+        """
         with self.room_locks[room_id]:
             room = self.get_room(room_id)
             valid, message, pattern = self.validate_play(room, player_id, card_ids)
@@ -270,7 +316,7 @@ class PresidentEngine:
             room.last_play = {'player_id': player_id, 'player_name': player.name, 'cards': card_ids, 'rank': pattern['rank'], 'count': pattern['count']}
             for p in room.players.values(): p.passed = False
             
-            print(f"Current count: {room.current_count}, Hand count: {player.hand_count}")
+            #print(f"Current count: {room.current_count}, Hand count: {player.hand_count}")
             # Check for automatic round win (2, JOKER, or 3 during inversion)
             auto_win = False
             # Auto-win only if playing the absolute highest rank
@@ -328,6 +374,16 @@ class PresidentEngine:
             return True, "Cards played successfully"
 
     def _apply_effect(self, room: RoomState, player_id: str, effect: str, count: int) -> bool:
+        """
+        Apply an effect to the room.
+        Args:
+            room: The current room state
+            player_id: The ID of the player making the play
+            effect: The effect to apply
+            count: The number of cards to apply the effect to
+        Returns:
+            bool: True if the effect was applied, False otherwise
+        """
         if effect == 'seven_gift':
             room.pending_gift = {'player_id': player_id, 'remaining': count}
             room.game_log.append(f"{room.players[player_id].name} must gift {count} cards!")
@@ -344,7 +400,13 @@ class PresidentEngine:
         return False
 
     def _check_game_end(self, room: RoomState):
-        """Check if the game should end (only one player left with cards)"""
+        """
+        Check if the game should end (only one player left with cards)
+        Args:
+            room: The current room state
+        Returns:
+            bool: True if the game should end, False otherwise
+        """
         players_with_cards = [p for p in room.players.values() if len(p.hand) > 0]
         if len(players_with_cards) <= 1:
             # Add the last player(s) to finished order if not already there
@@ -357,14 +419,28 @@ class PresidentEngine:
         return False
 
     def _advance_turn_if_no_pending(self, room: RoomState):
-        """Only advance turn if no pending effects"""
+        """
+        Only advance turn if no pending effects
+        Args:
+            room: The current room state
+        """
         if not room.pending_gift and not room.pending_discard:
             # Check if game should end before advancing turn
             if not self._check_game_end(room):
                 self._advance_turn(room)
 
     def submit_gift_distribution(self, room_id: str, player_id: str, assignments: List[dict]) -> Tuple[bool, str]:
-        """assignments = [{'to': player_id, 'cards': [card_ids]}]"""
+        """
+        Submit a gift distribution to the room.
+        Args:
+            room_id: The ID of the room
+            player_id: The ID of the player making the gift
+            assignments: A list of dictionaries, each containing a 'to' key with the ID of the recipient and a 'cards' key with the IDs of the cards to be gifted
+        Returns:
+            Tuple[bool, str]: A tuple containing:
+                - bool: True if the gift distribution was successful, False otherwise
+                - str: A message indicating the result of the gift distribution
+        """
         with self.room_locks[room_id]:
             room = self.get_room(room_id)
             if not room: return False, "Room not found"
@@ -411,6 +487,17 @@ class PresidentEngine:
             return True, "Gift distributed successfully"
 
     def submit_discard_selection(self, room_id: str, player_id: str, card_ids: List[str]) -> Tuple[bool, str]:
+        """
+        Submit a discard selection to the room.
+        Args:
+            room_id: The ID of the room
+            player_id: The ID of the player making the discard
+            card_ids: The IDs of the cards being discarded
+        Returns:
+            Tuple[bool, str]: A tuple containing:
+                - bool: True if the discard selection was successful, False otherwise
+                - str: A message indicating the result of the discard selection
+        """
         with self.room_locks[room_id]:
             room = self.get_room(room_id)
             if not room: return False, "Room not found"
@@ -452,12 +539,15 @@ class PresidentEngine:
 
     def _advance_turn(self, room: RoomState):
         players = sorted(room.players.values(), key=lambda p: p.seat)
-        idx = next(i for i,p in enumerate(players) if p.id == room.turn)
-        for i in range(1, len(players)):
-            nxt = players[(idx + i) % len(players)]
-            if nxt.hand and not nxt.passed:
+        idx = next((i for i,p in enumerate(players) if p.id == room.turn), 0)
+        n = len(players)
+        for i in range(1, n+1):
+            nxt = players[(idx + i) % n]
+            if nxt.hand and len(nxt.hand) > 0:
                 room.turn = nxt.id
                 return
+        # If no one has cards, set turn to None
+        room.turn = None
 
     def pass_turn(self, room_id: str, player_id: str) -> Tuple[bool, str]:
         with self.room_locks[room_id]:
@@ -619,6 +709,12 @@ def create_card_element(card_id: str, size='normal', selectable=False, selected=
 class GreedyBot:
     def __init__(self, engine: PresidentEngine): self.engine = engine
     def make_move(self, room_id: str, player_id: str):
+        """
+        Make a move for the bot.
+        Args:
+            room_id: The ID of the room
+            player_id: The ID of the player making the move
+        """
         room = self.engine.get_room(room_id)
         if not room or room.turn != player_id: return
         if room.pending_gift and room.pending_gift['player_id'] == player_id:
@@ -630,24 +726,31 @@ class GreedyBot:
         hand = player.hand
         valid_plays = []
         if room.current_rank is None:
-            # Only restrict to 3s for the very first play of the first game
+            # Case 1: Empty pile - special rules may apply
+            # Traditional President rules require the player with 3♦ to start
             if getattr(room, 'first_game', True) and not getattr(room, 'first_game_first_play_done', False):
-                # Only 3s by 3♦ holder
+                # Check if this bot has the 3 of diamonds and any 3s
                 if '3D' in hand and 3 in [parse_card(c)[0] for c in hand]:
+                    # Collect all 3s from hand
                     threes = [c for c in hand if parse_card(c)[0] == 3]
+                    # Add all possible combinations of 3s (singles, pairs, etc.)
                     for cnt in range(1, len(threes)+1):
                         valid_plays.append(threes[:cnt])
             else:
-                # Any valid set from hand
+                # Normal empty pile - any valid set of same-ranked cards is allowed
+                # Group cards by rank
                 rank_groups = {}
                 for card in hand:
                     rank = parse_card(card)[0]
                     if rank not in rank_groups:
                         rank_groups[rank] = []
                     rank_groups[rank].append(card)
+                
+                # For each rank group, try all possible play sizes (1 card, 2 cards, etc.)
                 for rank, cards in rank_groups.items():
                     for cnt in range(1, len(cards)+1):
                         play = cards[:cnt]
+                        # Validate the play against game rules
                         ok,_,_ = self.engine.validate_play(room, player_id, play)
                         if ok:
                             valid_plays.append(play)
@@ -658,7 +761,9 @@ class GreedyBot:
                 r,_ = parse_card(c)
                 groups[r].append(c)
             for rank, cards in groups.items():
+                # Check if the number of cards in the hand is greater than or equal to the current count
                 if len(cards) >= room.current_count:
+                    # Try all possible plays of the current count
                     play = cards[:room.current_count]
                     ok,_,_ = self.engine.validate_play(room, player_id, play)
                     if ok:
@@ -754,10 +859,12 @@ def create_mode_select_layout():
         html.Hr(),
         dbc.Row([
             dbc.Col([
+                dbc.Input(id='player-name-input', placeholder='Enter your name', type='text', value='', className='mb-2', maxLength=16, style={'width': '220px'}),
                 dbc.Button("Singleplayer (vs Bots)", id="singleplayer-btn", color="primary", size="lg", className="me-3"),
                 dbc.Button("Multiplayer (coming soon)", id="multiplayer-btn", color="secondary", size="lg", disabled=True),
             ], width="auto")
         ], justify="center", className="mb-4"),
+        dcc.Store(id='player-name', data=''),
         html.Div(id="mode-info")
     ], fluid=True)
 
@@ -1029,11 +1136,7 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
                 ], width=6),
         dbc.Col([
             dbc.Card([
-                                                  dbc.CardHeader([
-                              html.H5(f'🃏 {p.name}\'s Hand', className='mb-0'),
-                              html.Small(' (YOUR TURN!)' if is_my_turn else ' (waiting...)', 
-                                       className='text-success fw-bold' if is_my_turn else 'text-muted')
-                          ]), 
+                        dbc.CardHeader(html.H5(f'🃏 {p.name}\'s Hand', className='mb-0')), 
                 dbc.CardBody([
                     html.Div(special_prompt),
                             selection_info,
@@ -1073,23 +1176,32 @@ def restart_game(n_clicks):
     return dash.no_update, dash.no_update, dash.no_update
 
 @app.callback(
+    Output('player-name', 'data'),
+    Input('player-name-input', 'value'),
+    prevent_initial_call=False
+)
+def update_player_name(name):
+    return name or ''
+
+@app.callback(
     [Output('current-room','data'),
     Output('current-player','data'),
      Output('mode-info','children'),
      Output('game-version', 'data', allow_duplicate=True)],
     Input('singleplayer-btn', 'n_clicks'),
+    State('player-name', 'data'),
     prevent_initial_call=True
 )
-def start_singleplayer(n_single):
+def start_singleplayer(n_single, player_name):
     if n_single:
         # Use a unique room id for each session
         rid = f'singleplayer_{uuid.uuid4().hex[:8]}'
         engine.create_room(rid)
-        ok, pid = engine.add_player(rid, "You")
+        name = player_name.strip().title() if player_name and player_name.strip() else 'You'
+        ok, pid = engine.add_player(rid, name)
         for i in range(3):
             engine.add_player(rid, BOT_NAMES[i], True)
         engine.start_game(rid)
-        
         room = engine.get_room(rid)
         return rid, pid, None, room.version if room else 0
     return dash.no_update, dash.no_update, dash.no_update, dash.no_update
@@ -1470,6 +1582,8 @@ def _advance_turn(self, room: RoomState):
         if nxt.hand and len(nxt.hand) > 0:
             room.turn = nxt.id
             return
+    # If no one has cards, set turn to None
+    room.turn = None
 PresidentEngine._advance_turn = _advance_turn
 
 # 2. Fix submit_gift_distribution to add cards to recipient's hand and update hand_count
