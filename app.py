@@ -210,13 +210,18 @@ class PresidentEngine:
         regular_ranks = [r for r in ranks if r != 'JOKER']
         joker_count = ranks.count('JOKER')
         
-        # Check if all non-Joker cards are the same rank
+        # Allow a Joker to be played with a single non-Joker card as a valid pair/triplet/etc.
         if len(set(regular_ranks)) > 1:
             return False, "All non-Joker cards must be same rank", None
-        
         if regular_ranks:
             # If we have regular cards, Jokers act as that rank
             play_rank = regular_ranks[0]
+            # Special case: allow [X, JOKER] as a valid pair/triplet/etc.
+            if len(regular_ranks) == 1 and joker_count > 0:
+                # Valid: treat as a pair/triplet/etc. of play_rank
+                pass
+            elif len(set(regular_ranks)) > 1:
+                return False, "All non-Joker cards must be same rank", None
         elif joker_count > 0:
             # If only Jokers, they are treated as JOKER rank
             play_rank = 'JOKER'
@@ -385,14 +390,17 @@ class PresidentEngine:
         Returns:
             bool: True if the effect was applied, False otherwise
         """
+        player = room.players[player_id]
         if effect == 'seven_gift':
-            room.pending_gift = {'player_id': player_id, 'remaining': count}
-            room.game_log.append(f"{room.players[player_id].name} must gift {count} cards!")
+            remaining = min(count, len(player.hand))
+            room.pending_gift = {'player_id': player_id, 'remaining': remaining}
+            room.game_log.append(f"{room.players[player_id].name} must gift {remaining} cards!")
             return True
         if effect == 'eight_reset': return False
         if effect == 'ten_discard':
-            room.pending_discard = {'player_id': player_id, 'remaining': count}
-            room.game_log.append(f"{room.players[player_id].name} must discard {count} cards!")
+            remaining = min(count, len(player.hand))
+            room.pending_discard = {'player_id': player_id, 'remaining': remaining}
+            room.game_log.append(f"{room.players[player_id].name} must discard {remaining} cards!")
             return True
         if effect == 'jack_inversion':
             room.inversion_active = True
@@ -1522,7 +1530,7 @@ def assign_roles_dynamic(room):
         if pid not in room.finished_order:
             p.role = None
 
-# Patch play_cards to assign roles as soon as a player finishes
+# Patch play_cards to skip finished players
 old_play_cards = PresidentEngine.play_cards
 def play_cards(self, room_id: str, player_id: str, card_ids: List[str]) -> Tuple[bool, str]:
     with self.room_locks[room_id]:
@@ -1570,11 +1578,13 @@ def play_cards(self, room_id: str, player_id: str, card_ids: List[str]) -> Tuple
         effect_applied = False
         if pattern['effect']:
             effect_applied = self._apply_effect(room, player_id, pattern['effect'], pattern['count'])
+        finished_this_turn = False
         if len(player.hand) == 0:
             if player_id not in room.finished_order:
                 room.finished_order.append(player_id)
                 room.game_log.append(f"{player.name} finished in position {len(room.finished_order)}!")
                 assign_roles_dynamic(room)
+            finished_this_turn = True
             self._check_game_end(room)
         if not effect_applied or pattern['effect'] == 'eight_reset':
             if pattern['effect'] == 'eight_reset':
@@ -1588,11 +1598,113 @@ def play_cards(self, room_id: str, player_id: str, card_ids: List[str]) -> Tuple
                 room.game_log.append(f"{player.name} played {pattern['count']} 8s - pile cleared!")
                 room.last_round_winner = player_id
             else:
-                self._advance_turn(room)
+                # If player finished, skip to next player with cards
+                if finished_this_turn and not self._check_game_end(room):
+                    self._advance_turn(room)
+                else:
+                    self._advance_turn(room)
         room.version += 1
         room.game_log.append(f"{player.name} played: {', '.join([self._format_card(c) for c in card_ids])}")
         return True, "Cards played successfully"
 PresidentEngine.play_cards = play_cards
+
+# Patch submit_gift_distribution to skip finished players
+old_submit_gift_distribution = PresidentEngine.submit_gift_distribution
+def submit_gift_distribution(self, room_id: str, player_id: str, assignments: List[dict]) -> Tuple[bool, str]:
+    with self.room_locks[room_id]:
+        room = self.get_room(room_id)
+        if not room: return False, "Room not found"
+        if not room.pending_gift: return False, "No gift pending"
+        if room.pending_gift['player_id'] != player_id: return False, "Not your gift"
+        player = room.players[player_id]
+        total_cards = sum(len(a['cards']) for a in assignments)
+        if total_cards != room.pending_gift['remaining']:
+            return False, f"Must gift exactly {room.pending_gift['remaining']} cards"
+        all_cards = []
+        for assignment in assignments:
+            all_cards.extend(assignment['cards'])
+        for card in all_cards:
+            if card not in player.hand:
+                return False, f"You don't own {card}"
+        # Validate recipients: must not be in finished_order and must have cards
+        for assignment in assignments:
+            recipient = room.players[assignment['to']]
+            if assignment['to'] in room.finished_order or recipient.hand_count == 0:
+                return False, f"Cannot gift to finished player: {recipient.name}"
+        # Transfer cards
+        for assignment in assignments:
+            recipient = room.players[assignment['to']]
+            for card in assignment['cards']:
+                player.hand.remove(card)
+                recipient.hand.append(card)
+                recipient.hand_count = len(recipient.hand)
+        player.hand_count = len(player.hand)
+        room.pending_gift = None
+        gift_details = []
+        for assignment in assignments:
+            recipient_name = room.players[assignment['to']].name
+            gift_details.append(f"{len(assignment['cards'])} to {recipient_name}")
+        room.game_log.append(f"{player.name} gifted: {', '.join(gift_details)}")
+        finished_this_turn = False
+        if len(player.hand) == 0:
+            if player_id not in room.finished_order:
+                room.finished_order.append(player_id)
+                room.game_log.append(f"{player.name} finished in position {len(room.finished_order)}!")
+                assign_roles_dynamic(room)
+            finished_this_turn = True
+            self._check_game_end(room)
+        if not self._check_game_end(room):
+            if finished_this_turn:
+                self._advance_turn_if_no_pending(room)
+            else:
+                self._advance_turn_if_no_pending(room)
+        room.version += 1
+        return True, "Gift distributed successfully"
+PresidentEngine.submit_gift_distribution = submit_gift_distribution
+
+# Patch submit_discard_selection to skip finished players
+old_submit_discard_selection = PresidentEngine.submit_discard_selection
+def submit_discard_selection(self, room_id: str, player_id: str, card_ids: List[str]) -> Tuple[bool, str]:
+    with self.room_locks[room_id]:
+        room = self.get_room(room_id)
+        if not room: return False, "Room not found"
+        if not room.pending_discard: return False, "No discard pending"
+        if room.pending_discard['player_id'] != player_id: return False, "Not your discard"
+        player = room.players[player_id]
+        required = room.pending_discard['remaining']
+        if len(card_ids) > required:
+            return False, f"Can only discard {required} cards"
+        for card in card_ids:
+            if card not in player.hand:
+                return False, f"You don't own {card}"
+        for card in card_ids:
+            player.hand.remove(card)
+            room.discard.append(card)
+        player.hand_count = len(player.hand)
+        discarded_count = len(card_ids)
+        remaining = required - discarded_count
+        finished_this_turn = False
+        if len(player.hand) == 0:
+            if player_id not in room.finished_order:
+                room.finished_order.append(player_id)
+                room.game_log.append(f"{player.name} finished in position {len(room.finished_order)}!")
+                assign_roles_dynamic(room)
+            finished_this_turn = True
+            self._check_game_end(room)
+        if remaining <= 0:
+            room.pending_discard = None
+            room.game_log.append(f"{player.name} discarded {discarded_count} cards")
+            if not self._check_game_end(room):
+                if finished_this_turn:
+                    self._advance_turn_if_no_pending(room)
+                else:
+                    self._advance_turn_if_no_pending(room)
+        else:
+            room.pending_discard['remaining'] = remaining
+            room.game_log.append(f"{player.name} discarded {discarded_count} cards ({remaining} more needed)")
+        room.version += 1
+        return True, f"Discarded {discarded_count} cards" + (f" ({remaining} more needed)" if remaining > 0 else "")
+PresidentEngine.submit_discard_selection = submit_discard_selection
 
 # Patch pass_turn to assign roles as soon as a player finishes
 old_pass_turn = PresidentEngine.pass_turn
