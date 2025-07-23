@@ -1989,6 +1989,8 @@ def update_game_and_trigger_bots(n_intervals, rid, pid, selected_cards, last_ver
                 best_cards = bot._get_best_cards(scumbag.hand, 1)
                 if best_cards:
                     engine.submit_scumbag_card(rid, scumbag_id, best_cards[0])
+                    # Return early to prevent immediate triggering of next exchange
+                    return create_game_layout(room, pid, selected_cards), room.version
         
         # Manual exchanges (only for bots, humans handle via UI):
         # - President to Asshole (president gives 2 cards)
