@@ -1032,9 +1032,6 @@ class PresidentEngine:
         # Clear previous game roles for card exchange
         room.previous_game_roles.clear()
 
-        # Clear current game roles for card exchange
-        room.current_game_roles.clear()
-
     def _format_card(self, card_id: str) -> str:
         rank, suit = parse_card(card_id)
         suit_symbols = {'S':'♠','H':'♥','D':'♦','C':'♣'}
@@ -2313,11 +2310,9 @@ def assign_roles_dynamic(room):
             room.players[pid].role = None
             room.current_game_roles[pid] = None
     
-    # For players still in the game, clear their role until they finish
-    for pid, p in room.players.items():
-        if pid not in room.finished_order:
-            p.role = None
-            room.current_game_roles[pid] = None
+    # DO NOT clear roles for players still in the game
+    # They should keep their previous roles until they actually finish
+    # Only assign roles to players who have finished
 
 
 
