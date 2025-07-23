@@ -44,3 +44,5 @@ __pycache__/
 .env.test
 .env.productionnode_modules/
 .next/
+node_modules/
+.next/
