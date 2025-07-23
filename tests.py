@@ -50,6 +50,9 @@ class PresidentGameTests:
         # Test 9: Card exchange between roles
         self.test_card_exchange()
         
+        # Test 10: Role preservation in subsequent games
+        self.test_role_preservation_in_subsequent_games()
+        
         print("=" * 50)
         print(f"📊 Test Results: {self.passed_tests} passed, {self.failed_tests} failed out of {self.test_count} total tests")
         
@@ -760,6 +763,9 @@ class PresidentGameTests:
         from app import assign_roles_dynamic
         assign_roles_dynamic(room)
         
+        # Store current roles as previous game roles for card exchange
+        room.previous_game_roles = room.current_game_roles.copy()
+        
         # Test 9.2: Simulate restart process (like clicking "New Game" button)
         # First, simulate the restart callback logic
         room.phase = 'lobby'
@@ -776,11 +782,8 @@ class PresidentGameTests:
         self.engine.start_game("test_exchange_1")
         room = self.engine.get_room("test_exchange_1")
         
-        # Now simulate the restart callback logic for card exchange
-        if room and not room.first_game and any(p.role for p in room.players.values()):
-            self.engine._start_card_exchange(room)
-        
-        room = self.engine.get_room("test_exchange_1")
+        # The start_game should now automatically trigger card exchange
+        # No need to manually call _start_card_exchange
         
         self.assert_test(room.exchange_phase, "Card exchange phase started at beginning of new game")
         self.assert_test(room.pending_exchange['current_exchange'] == 'asshole_to_president', "Asshole must give cards to President first")
@@ -864,6 +867,62 @@ class PresidentGameTests:
         
         self.assert_test(not room2.exchange_phase, "First game should not have card exchange phase")
         self.assert_test(room2.phase == 'play', "First game should go directly to play phase")
+
+    def test_role_preservation_in_subsequent_games(self):
+        """Test that roles are properly preserved and displayed in subsequent games"""
+        print("\n🧪 Test 10: Role Preservation in Subsequent Games")
+        print("-" * 50)
+        
+        # Setup test room
+        room_id = "test_role_preservation"
+        self.setup_test_room(room_id)
+        
+        # Start first game
+        success, msg = self.engine.start_game(room_id)
+        self.assert_test(success, "First game started successfully")
+        
+        # Simulate a complete game to assign roles
+        room = self.engine.get_room(room_id)
+        
+        # Add players to finished order to simulate game completion
+        player_ids = list(room.players.keys())
+        room.finished_order = player_ids  # First player becomes President, last becomes Asshole
+        
+        # Assign roles
+        assign_roles_dynamic(room)
+        
+        # Verify roles are assigned
+        president = room.players[player_ids[0]]
+        asshole = room.players[player_ids[-1]]
+        self.assert_test(president.role == 'President', "First player got President role")
+        self.assert_test(asshole.role == 'Asshole', "Last player got Asshole role")
+        
+        # End the game
+        self.engine._end_game(room)
+        
+        # Verify roles are still assigned after game ends
+        self.assert_test(president.role == 'President', "President role preserved after game end")
+        self.assert_test(asshole.role == 'Asshole', "Asshole role preserved after game end")
+        
+        # Start a new game (simulate restart)
+        room.first_game = False
+        success, msg = self.engine.start_game(room_id)
+        self.assert_test(success, "Second game started successfully")
+        
+        # Verify roles are still preserved
+        room = self.engine.get_room(room_id)
+        self.assert_test(president.role == 'President', "President role preserved in second game")
+        self.assert_test(asshole.role == 'Asshole', "Asshole role preserved in second game")
+        
+        # Manually start card exchange phase (this is what the restart callback does)
+        if not room.first_game and any(p.role for p in room.players.values()):
+            self.engine._start_card_exchange(room)
+        
+        # Verify card exchange phase starts
+        self.assert_test(room.exchange_phase, "Card exchange phase started in second game")
+        self.assert_test(room.pending_exchange is not None, "Pending exchange is set up")
+        
+        print("✅ Role preservation in subsequent games working correctly")
 
 if __name__ == "__main__":
     tests = PresidentGameTests()

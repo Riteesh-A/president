@@ -10,6 +10,7 @@ import time
 import threading
 from collections import defaultdict
 import uuid
+import num2words
 import pandas as pd  # Add this import at the top
 
 # ===================== GAME MODELS =====================
@@ -55,6 +56,9 @@ class RoomState:
     # Card exchange phase
     pending_exchange: Optional[dict] = None  # Exchange phase data
     exchange_phase: bool = False  # Whether we're in exchange phase
+    # Role tracking for current and previous game
+    current_game_roles: Dict[str, str] = field(default_factory=dict)
+    previous_game_roles: Dict[str, str] = field(default_factory=dict)
 
 # ===================== GAME CONSTANTS & UTILS =====================
 
@@ -100,7 +104,7 @@ def can_joker_beat_rank(target_rank, inversion=False):
     """
     if inversion:
         # During inversion, joker can act as any rank that beats the target
-        # In inverted order, lower ranks beat higher ranks
+        # Inverted order, lower ranks beat higher ranks
         order = list(reversed(NORMAL_ORDER))
         try:
             target_index = order.index(target_rank)
@@ -202,8 +206,14 @@ class PresidentEngine:
             if len(room.players) < 3:
                 return False, "Need at least 3 players"
             room.phase = 'dealing'
-            room.finished_order = []
+            # Clear game state for new game
+            room.finished_order = []  # Always clear for new game
+            room.current_game_roles.clear()  # Clear current game roles
             room.game_log = []
+
+            # Clear player roles for new game (but preserve previous_game_roles for card exchange)
+            for player in room.players.values():
+                player.role = None
 
             # Create deck and deal cards
             deck = create_deck(True)
@@ -218,45 +228,52 @@ class PresidentEngine:
                 player.hand = deck[start_idx:end_idx]
                 player.hand_count = len(player.hand)
                 player.passed = False
-            
-
 
             # Set first_game flag
             if not hasattr(room, 'first_game'):
                 room.first_game = True
 
-            # Set starter
-            if room.first_game:
-                starter = None
-                for player in players:
-                    if '3D' in player.hand:
-                        starter = player.id
-                        break
-                if not starter:
-                    starter = players[0].id
-                room.turn = starter
+            # Check if this is a subsequent game and start card exchange
+            if not room.first_game and room.previous_game_roles:
+                # Start card exchange phase
+                self._start_card_exchange(room)
+                room.phase = 'exchange'  # Set phase to exchange instead of play
+                room.version += 1
+                return True, "Card exchange phase started"
             else:
-                # Asshole from previous game starts (last in finished_order)
-                asshole_id = None
-                if hasattr(room, 'global_asshole_id') and room.global_asshole_id in room.players:
-                    asshole_id = room.global_asshole_id
-                elif room.finished_order:
-                    asshole_id = room.finished_order[-1]
-                if asshole_id and asshole_id in room.players:
-                    room.turn = asshole_id
+                # First game or no previous roles - start normal play
+                # Set starter
+                if room.first_game:
+                    starter = None
+                    for player in players:
+                        if '3D' in player.hand:
+                            starter = player.id
+                            break
+                    if not starter:
+                        starter = players[0].id
+                    room.turn = starter
                 else:
-                    room.turn = players[0].id
-            room.phase = 'play'
-            room.current_rank = None
-            room.current_count = None
-            room.inversion_active = False
-            room.version += 1
-            starter_name = room.players[room.turn].name
-            if room.first_game:
-                room.game_log.append(f"Game started! {starter_name} goes first (has 3♦)")
-            else:
-                room.game_log.append(f"New round! {starter_name} (Asshole) goes first")
-            return True, "Game started!"
+                    # Asshole from previous game starts (last in finished_order)
+                    asshole_id = None
+                    if hasattr(room, 'global_asshole_id') and room.global_asshole_id in room.players:
+                        asshole_id = room.global_asshole_id
+                    elif room.finished_order:
+                        asshole_id = room.finished_order[-1]
+                    if asshole_id and asshole_id in room.players:
+                        room.turn = asshole_id
+                    else:
+                        room.turn = players[0].id
+                room.phase = 'play'
+                room.current_rank = None
+                room.current_count = None
+                room.inversion_active = False
+                room.version += 1
+                starter_name = room.players[room.turn].name
+                if room.first_game:
+                    room.game_log.append(f"Game started! {starter_name} goes first (has 3♦)")
+                else:
+                    room.game_log.append(f"New round! {starter_name} (Asshole) goes first")
+                return True, "Game started!"
     
     def validate_play(self, room: RoomState, player_id: str, card_ids: List[str]) -> Tuple[bool, str, Optional[dict]]:
         """
@@ -308,8 +325,15 @@ class PresidentEngine:
         # Only enforce 3s rule if first_game and opening play
         if room.current_rank is None:
             if getattr(room, 'first_game', True) and not getattr(room, 'first_game_first_play_done', False):
-                if play_rank != 3 and play_rank != 'JOKER':
-                    return False, "First play of the game must be 3s", None
+                # Check if the play contains any 3s or Jokers
+                has_valid_first_play = False
+                for card_id in card_ids:
+                    rank = parse_card(card_id)[0]
+                    if rank == 3 or rank == 'JOKER':
+                        has_valid_first_play = True
+                        break
+                if not has_valid_first_play:
+                    return False, "First play of the game must contain 3s or Jokers", None
             effect = self._get_effect_type(play_rank)
             return True, "Valid play", {'rank': play_rank, 'count': play_count, 'effect': effect}
         
@@ -467,12 +491,21 @@ class PresidentEngine:
                 room.current_rank = None
                 room.current_count = None
                 room.inversion_active = False
-                # Same player starts next round
-                for p in room.players.values(): p.passed = False
-                room.version += 1
-                room.game_log.append(f"{player.name} starts new round after auto-win")
-                room.last_round_winner = player_id  # Set last_round_winner
-                return True, "Auto-win! New round started"
+                
+                # Check if player who auto-won has cards left in their hand
+                if len(player.hand) == 0:
+                    # Player who auto-won has no cards left in their hand
+                    room.game_log.append(f"{player.name} completed their hand!")
+                    # Advance turn to next player
+                    self._advance_turn(room)
+                    return True, "Auto-win + Completed hand! New round started"
+                else:
+                    # Same player starts next round
+                    for p in room.players.values(): p.passed = False
+                    room.version += 1
+                    room.game_log.append(f"{player.name} starts new round after auto-win")
+                    room.last_round_winner = player_id  # Set last_round_winner
+                    return True, "Auto-win! New round started"
             # Check if game ended due to player finishing
             game_ended = False
             if finished_this_turn:
@@ -620,7 +653,8 @@ class PresidentEngine:
             gift_details = []
             for assignment in assignments:
                 recipient_name = room.players[assignment['to']].name
-                gift_details.append(f"{len(assignment['cards'])} to {recipient_name}")
+                gifted_cards = [self._format_card(c) for c in assignment['cards']][0].replace(' of ', ' ')
+                gift_details.append(f"{len(assignment['cards'])} {gifted_cards} to {recipient_name}")
             room.game_log.append(f"{player.name} gifted: {', '.join(gift_details)}")
             
             # Check if player finished after gifting
@@ -712,7 +746,7 @@ class PresidentEngine:
         n = len(players)
         for i in range(1, n+1):
             nxt = players[(idx + i) % n]
-            if nxt.hand and len(nxt.hand) > 0:
+            if len(nxt.hand) > 0:  # Only advance to players with cards
                 room.turn = nxt.id
                 return
         # If no one has cards, set turn to None
@@ -754,15 +788,17 @@ class PresidentEngine:
         for p in room.players.values():
             if p.id not in room.finished_order and len(p.hand) == 0:
                 room.finished_order.append(p.id)
-                room.game_log.append(f"{p.name} finished LAST - Asshole!")
+                room.game_log.append(f"{p.name} finished in position {len(room.finished_order)}!")
         
-        # Ensure all players are in finished_order (in case some still have cards)
-        for p in room.players.values():
-            if p.id not in room.finished_order:
-                room.finished_order.append(p.id)
+        # Only add players who actually finished (have no cards) to finished_order
+        # Don't add players who still have cards - they should be added when they actually finish
+        # The finished_order should only contain players who actually emptied their hands
         
         # Use assign_roles_dynamic to ensure consistent role assignment
         assign_roles_dynamic(room)
+        
+        # Store current game roles as previous game roles for card exchange
+        room.previous_game_roles = room.current_game_roles.copy()
         
         room.phase = 'finished'
         room.game_log.append("Game finished!")
@@ -782,14 +818,14 @@ class PresidentEngine:
         scumbag_id = None
         asshole_id = None
         
-        for pid, player in room.players.items():
-            if player.role == 'President':
+        for pid, role in room.previous_game_roles.items():
+            if role == 'President':
                 president_id = pid
-            elif player.role == 'Vice President':
+            elif role == 'Vice President':
                 vice_president_id = pid
-            elif player.role == 'Scumbag':
+            elif role == 'Scumbag':
                 scumbag_id = pid
-            elif player.role == 'Asshole':
+            elif role == 'Asshole':
                 asshole_id = pid
         
         # Set up exchange phase
@@ -886,15 +922,20 @@ class PresidentEngine:
             
             room.pending_exchange['president_given_cards'] = card_ids
             
-            # Check if we need to do scumbag/vice president exchange
-            if room.pending_exchange['scumbag_id'] and room.pending_exchange['vice_president_id']:
+            # Check if we need to do Scumbag → Vice President exchange
+            scumbag_id = room.pending_exchange['scumbag_id']
+            vice_president_id = room.pending_exchange['vice_president_id']
+            
+            if scumbag_id and vice_president_id:
+                # Move to Scumbag → Vice President exchange
                 room.pending_exchange['current_exchange'] = 'scumbag_to_vice'
-                room.game_log.append(f"Scumbag ({room.players[room.pending_exchange['scumbag_id']].name}) must give best card to Vice President ({room.players[room.pending_exchange['vice_president_id']].name})")
+                room.game_log.append(f"{president.name} gave {', '.join([self._format_card(c) for c in card_ids])} to {asshole.name}")
+                room.game_log.append(f"Scumbag ({room.players[scumbag_id].name}) must now give 1 best card to Vice President ({room.players[vice_president_id].name})")
             else:
-                # No scumbag/vice president, finish exchange
+                # No more exchanges, finish
+                room.game_log.append(f"{president.name} gave {', '.join([self._format_card(c) for c in card_ids])} to {asshole.name}")
                 self._finish_card_exchange(room)
             
-            room.game_log.append(f"{president.name} gave {', '.join([self._format_card(c) for c in card_ids])} to {asshole.name}")
             room.version += 1
             return True, "Cards given to asshole"
 
@@ -979,9 +1020,20 @@ class PresidentEngine:
         room.phase = 'play'  # Transition to play phase
         room.game_log.append("🎉 Card exchange completed! Game ready to start.")
         
-        # Clear roles for the new game
-        for player in room.players.values():
-            player.role = None
+        # Set turn to the asshole from the previous game
+        if room.global_asshole_id and room.global_asshole_id in room.players:
+            room.turn = room.global_asshole_id
+            room.game_log.append(f"🎯 {room.players[room.global_asshole_id].name} (Asshole from last game) starts the new game!")
+        else:
+            # Fallback: set turn to first player
+            room.turn = list(room.players.keys())[0]
+            room.game_log.append(f"🎯 {room.players[room.turn].name} starts the new game!")
+        
+        # Clear previous game roles for card exchange
+        room.previous_game_roles.clear()
+
+        # Clear current game roles for card exchange
+        room.current_game_roles.clear()
 
     def _format_card(self, card_id: str) -> str:
         rank, suit = parse_card(card_id)
@@ -1101,7 +1153,26 @@ class GreedyBot:
         if room.pending_discard and room.pending_discard['player_id'] == player_id:
             self._handle_discard(room_id, player_id, room.pending_discard['remaining']); return
         if room.exchange_phase and room.pending_exchange:
-            self._handle_card_exchange(room_id, player_id); return
+            # Handle card exchange based on the exchange type
+            exchange = room.pending_exchange
+            player = room.players[player_id]
+            
+            # Automatic exchanges (for both bots and humans):
+            # - Asshole to President (asshole gives 2 best cards)
+            # - Scumbag to Vice President (scumbag gives 1 best card)
+            if (exchange['current_exchange'] == 'asshole_to_president' and player_id == exchange['asshole_id']) or \
+               (exchange['current_exchange'] == 'scumbag_to_vice' and player_id == exchange['scumbag_id']):
+                self._handle_card_exchange(room_id, player_id)
+                return
+            
+            # Manual exchanges (only for bots, humans handle via UI):
+            # - President to Asshole (president gives 2 cards)
+            # - Vice President to Scumbag (vice president gives 1 card)
+            if (exchange['current_exchange'] == 'president_to_asshole' and player_id == exchange['president_id']) or \
+               (exchange['current_exchange'] == 'vice_to_scumbag' and player_id == exchange['vice_president_id']):
+                if player.is_bot:
+                    self._handle_card_exchange(room_id, player_id)
+                return
         player = room.players[player_id]
         # --- PATCH: allow any valid play on empty pile except for very first play of first game ---
         hand = player.hand
@@ -1268,9 +1339,9 @@ class GreedyBot:
             self.engine.submit_asshole_cards(room_id, player_id, best_cards)
             
         elif exchange['current_exchange'] == 'president_to_asshole' and player_id == exchange['president_id']:
-            # President gives 2 cards (not necessarily best)
-            cards_to_give = player.hand[:2] if len(player.hand) >= 2 else player.hand.copy()
-            self.engine.submit_president_cards(room_id, player_id, cards_to_give)
+            # President gives 2 worst cards to Asshole
+            worst_cards = self._get_worst_cards(player.hand, 2)
+            self.engine.submit_president_cards(room_id, player_id, worst_cards)
             
         elif exchange['current_exchange'] == 'scumbag_to_vice' and player_id == exchange['scumbag_id']:
             # Scumbag gives best card
@@ -1279,33 +1350,23 @@ class GreedyBot:
                 self.engine.submit_scumbag_card(room_id, player_id, best_cards[0])
                 
         elif exchange['current_exchange'] == 'vice_to_scumbag' and player_id == exchange['vice_president_id']:
-            # Vice president gives 1 card
-            cards_to_give = player.hand[:1] if player.hand else []
-            if cards_to_give:
-                self.engine.submit_vice_president_card(room_id, player_id, cards_to_give[0])
+            # Vice president gives 1 worst card to Scumbag
+            worst_cards = self._get_worst_cards(player.hand, 1)
+            if worst_cards:
+                self.engine.submit_vice_president_card(room_id, player_id, worst_cards[0])
 
     def _get_best_cards(self, hand: List[str], count: int) -> List[str]:
         """Get the best cards from hand based on game rank order"""
         if not hand or count <= 0:
             return []
         
-        # Sort cards by rank (highest first)
+        # Sort cards by rank (highest first) using NORMAL_ORDER
         def card_rank(card):
             rank, _ = parse_card(card)
-            if rank == 'JOKER':
-                return 999  # Jokers are highest
-            elif rank == 2:
-                return 998  # 2s are second highest
-            elif rank == 'A':
-                return 997
-            elif rank == 'K':
-                return 996
-            elif rank == 'Q':
-                return 995
-            elif rank == 'J':
-                return 994
-            else:
-                return rank  # 3-10
+            try:
+                return NORMAL_ORDER.index(rank)
+            except ValueError:
+                return 999  # Unknown ranks go to the end
         
         sorted_cards = sorted(hand, key=card_rank, reverse=True)
         return sorted_cards[:count]
@@ -1315,25 +1376,15 @@ class GreedyBot:
         if not hand or count <= 0:
             return []
         
-        # Sort cards by rank (lowest first)
+        # Sort cards by rank (lowest first) using NORMAL_ORDER
         def card_rank(card):
             rank, _ = parse_card(card)
-            if rank == 'JOKER':
-                return 999  # Jokers are highest
-            elif rank == 2:
-                return 998  # 2s are second highest
-            elif rank == 'A':
-                return 997
-            elif rank == 'K':
-                return 996
-            elif rank == 'Q':
-                return 995
-            elif rank == 'J':
-                return 994
-            else:
-                return rank  # 3-10
+            try:
+                return NORMAL_ORDER.index(rank)
+            except ValueError:
+                return 999  # Unknown ranks go to the end
         
-        sorted_cards = sorted(hand, key=card_rank, reverse=False)  # Lowest first
+        sorted_cards = sorted(hand, key=card_rank, reverse=False) # Lowest first  
         return sorted_cards[:count]
 
 # ===================== DASH APP =====================
@@ -1501,10 +1552,20 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
         ])
     ], className='mb-3', style={'background': 'rgba(255,255,255,0.95)', 'border': 'none', 'borderRadius': '15px', 'boxShadow': '0 8px 32px rgba(0,0,0,0.1)'})
     
-    # Players table
+    # Players table - show roles only during exchange phase or finished phase
+    def get_role_display(player):
+        if room.exchange_phase or room.phase == 'finished':
+            return player.role or '-'
+        else:
+            # Keep track of roles: first person to finish gets president, second gets vice, etc.
+            if player.id in room.finished_order:
+                return f"{player.role}"
+            else:
+                return '-'
+    
     table_data = {
         'Player':[pl.name+(' (Bot)' if pl.is_bot else '') for pl in sorted(room.players.values(), key=lambda x:x.seat)],
-        'Role':[pl.role or '-' for pl in sorted(room.players.values(), key=lambda x:x.seat)],
+        'Role':[get_role_display(pl) for pl in sorted(room.players.values(), key=lambda x:x.seat)],
         'Cards':[pl.hand_count for pl in sorted(room.players.values(), key=lambda x:x.seat)],
         'Passed':['✓' if pl.passed else '' for pl in sorted(room.players.values(), key=lambda x:x.seat)],
         'Turn':['🎯 YOU!' if room.turn==pl.id and pl.id==pid and len(pl.hand) > 0 else '▶' if room.turn==pl.id and len(pl.hand) > 0 else '' for pl in sorted(room.players.values(), key=lambda x:x.seat)]
@@ -1532,7 +1593,7 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
     actions = []
     special_prompt = []
     
-    if room.phase == 'finished' or (room.phase == 'dealing' and room.exchange_phase):
+    if room.phase == 'finished' or room.exchange_phase:
         # Game finished or card exchange phase
         role_colors = {
             'President': 'success',
@@ -1548,11 +1609,11 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
             exchange_ui = []
             
             if exchange['current_exchange'] == 'asshole_to_president' and pid == exchange['asshole_id']:
+                # Automatic exchange - no manual selection needed
                 exchange_ui = [
                     dbc.Alert([
-                        html.H5("🎁 Give 2 Best Cards to President", className="mb-3"),
-                        html.P("Select your 2 best cards to give to the President", className='mb-2'),
-                        dbc.Button('Give Selected Cards', id={'type': 'exchange-btn', 'action': 'asshole_to_president'}, color='danger', className='me-2', disabled=len(selected_cards) != 2),
+                        html.H5("🎁 Automatic Exchange", className="mb-3"),
+                        html.P("Your 2 best cards will be automatically given to the President", className='mb-2'),
                     ], color='danger', className='mb-3')
                 ]
             elif exchange['current_exchange'] == 'president_to_asshole' and pid == exchange['president_id']:
@@ -1564,11 +1625,11 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
                     ], color='success', className='mb-3')
                 ]
             elif exchange['current_exchange'] == 'scumbag_to_vice' and pid == exchange['scumbag_id']:
+                # Automatic exchange - no manual selection needed
                 exchange_ui = [
                     dbc.Alert([
-                        html.H5("🎁 Give Best Card to Vice President", className="mb-3"),
-                        html.P("Select your best card to give to the Vice President", className='mb-2'),
-                        dbc.Button('Give Selected Card', id={'type': 'exchange-btn', 'action': 'scumbag_to_vice'}, color='warning', className='mb-3', disabled=len(selected_cards) != 1),
+                        html.H5("🎁 Automatic Exchange", className="mb-3"),
+                        html.P("Your best card will be automatically given to the Vice President", className='mb-2'),
                     ], color='warning', className='mb-3')
                 ]
             elif exchange['current_exchange'] == 'vice_to_scumbag' and pid == exchange['vice_president_id']:
@@ -1681,7 +1742,7 @@ def create_game_layout(room: RoomState, pid: str, selected_cards=None):
     # Game log
     log = html.Div([
         html.P(e, className='mb-1 p-2 bg-light rounded') for e in room.game_log[-8:]
-    ], style={'height':'200px','overflowY':'auto', 'border': '1px solid #dee2e6', 'borderRadius': '8px', 'padding': '8px'})
+    ], style={'height':'400px','overflowY':'auto', 'border': '1px solid #dee2e6', 'borderRadius': '8px', 'padding': '8px'})
     
     # Selection info - always show when it's player's turn
     selection_info = html.Div([
@@ -1750,9 +1811,9 @@ def restart_game(n_clicks, player_name, current_room_id):
         # Reuse the same room to preserve game state
         room = engine.get_room(current_room_id)
         if room:
-            # Reset the room for a new game while preserving the global_asshole_id
+            # Reset the room for a new game while preserving the global_asshole_id and roles
             room.phase = 'lobby'
-            room.finished_order = []
+            # Don't clear finished_order - it's needed for role assignment
             room.game_log = []
             room.current_rank = None
             room.current_count = None
@@ -1768,12 +1829,12 @@ def restart_game(n_clicks, player_name, current_room_id):
             room.first_game = False  # This is now a continuation game
             room.first_game_first_play_done = False
             
-            # Reset player hands and states
+            # Preserve roles for card exchange, but reset other player states
             for player in room.players.values():
                 player.hand = []
                 player.hand_count = 0
                 player.passed = False
-                player.role = None  # Clear roles for new game
+                # Don't clear roles yet - they're needed for card exchange
             
             # Start the new game
             engine.start_game(current_room_id)
@@ -1879,40 +1940,73 @@ def update_game_and_trigger_bots(n_intervals, rid, pid, selected_cards, last_ver
     if not room:
         raise dash.exceptions.PreventUpdate
     
-    # Always trigger bot moves if it's a bot's turn
+
+    print(f"\n🔍 DEBUG - Room: {rid}, Phase: {room.phase}, Exchange Phase: {room.exchange_phase}")
+    print(f"Turn: {room.players[room.turn].name if room.turn else 'None'}")
+    for player_id, player in room.players.items():
+        # Sort cards by rank for better debugging visibility
+        sorted_hand = sorted(player.hand, key=lambda card: NORMAL_ORDER.index(parse_card(card)[0]) if parse_card(card)[0] in NORMAL_ORDER else 999)
+        print(f"  {player.name} ({player.role}): {len(player.hand)} cards - {sorted_hand}")
+    if room.pending_exchange:
+        print(f"Pending Exchange: {room.pending_exchange['current_exchange']}")
+    # Always trigger bot moves if it's a bot's turn (but not during card exchange phase)
     if room.phase == 'play' and room.turn and room.turn in room.players:
-        current_player = room.players[room.turn]
-        if current_player.is_bot:
-            # Handle pending effects first
-            if room.pending_gift and room.pending_gift['player_id'] == room.turn:
-                bot._handle_gift(rid, room.turn, room.pending_gift['remaining'])
-            elif room.pending_discard and room.pending_discard['player_id'] == room.turn:
-                bot._handle_discard(rid, room.turn, room.pending_discard['remaining'])
-            else:
-                bot.make_move(rid, room.turn)
+        # Don't trigger normal bot moves during card exchange, only card exchange handling
+        if not room.exchange_phase:
+            current_player = room.players[room.turn]
+            if current_player.is_bot:
+                # Handle pending effects first
+                if room.pending_gift and room.pending_gift['player_id'] == room.turn:
+                    bot._handle_gift(rid, room.turn, room.pending_gift['remaining'])
+                elif room.pending_discard and room.pending_discard['player_id'] == room.turn:
+                    bot._handle_discard(rid, room.turn, room.pending_discard['remaining'])
+                else:
+                    bot.make_move(rid, room.turn)
     
-    # Handle bot card exchange
+    # Handle card exchange (automatic for all players in automatic exchanges, manual for humans in manual exchanges)
     if room.exchange_phase and room.pending_exchange:
         exchange = room.pending_exchange
         current_exchange = exchange['current_exchange']
         
-        # Check if current exchange involves a bot
-        bot_id = None
+        # Automatic exchanges (for both bots and humans):
+        # - Asshole to President (asshole gives 2 best cards)
+        # - Scumbag to Vice President (scumbag gives 1 best card)
         if current_exchange == 'asshole_to_president' and exchange['asshole_id'] in room.players:
-            if room.players[exchange['asshole_id']].is_bot:
-                bot_id = exchange['asshole_id']
-        elif current_exchange == 'president_to_asshole' and exchange['president_id'] in room.players:
-            if room.players[exchange['president_id']].is_bot:
-                bot_id = exchange['president_id']
+            asshole_id = exchange['asshole_id']
+            asshole = room.players[asshole_id]
+            if asshole.is_bot:
+                bot._handle_card_exchange(rid, asshole_id)
+            else:
+                # Human asshole - trigger automatic exchange
+                best_cards = bot._get_best_cards(asshole.hand, 2)
+                if best_cards:
+                    engine.submit_asshole_cards(rid, asshole_id, best_cards)
+                    
         elif current_exchange == 'scumbag_to_vice' and exchange['scumbag_id'] in room.players:
-            if room.players[exchange['scumbag_id']].is_bot:
-                bot_id = exchange['scumbag_id']
-        elif current_exchange == 'vice_to_scumbag' and exchange['vice_president_id'] in room.players:
-            if room.players[exchange['vice_president_id']].is_bot:
-                bot_id = exchange['vice_president_id']
+            scumbag_id = exchange['scumbag_id']
+            scumbag = room.players[scumbag_id]
+            if scumbag.is_bot:
+                bot._handle_card_exchange(rid, scumbag_id)
+            else:
+                # Human scumbag - trigger automatic exchange
+                best_cards = bot._get_best_cards(scumbag.hand, 1)
+                if best_cards:
+                    engine.submit_scumbag_card(rid, scumbag_id, best_cards[0])
         
-        if bot_id:
-            bot._handle_card_exchange(rid, bot_id)
+        # Manual exchanges (only for bots, humans handle via UI):
+        # - President to Asshole (president gives 2 cards)
+        # - Vice President to Scumbag (vice president gives 1 card)
+        elif current_exchange == 'president_to_asshole' and exchange['president_id'] in room.players:
+            president_id = exchange['president_id']
+            president = room.players[president_id]
+            if president.is_bot:
+                bot._handle_card_exchange(rid, president_id)
+                
+        elif current_exchange == 'vice_to_scumbag' and exchange['vice_president_id'] in room.players:
+            vice_president_id = exchange['vice_president_id']
+            vice_president = room.players[vice_president_id]
+            if vice_president.is_bot:
+                bot._handle_card_exchange(rid, vice_president_id)
     
     # Only update layout if game version changed
     if room.version != last_version:
@@ -2025,6 +2119,10 @@ def handle_all_card_actions(card_clicks, action_clicks, exchange_clicks, selecte
                     ok, msg = engine.submit_gift_distribution(rid, pid, assignments)
                     room = engine.get_room(rid)
                     updated_version = room.version if room else last_version
+                    if not ok:
+                        return selected, ['light'] * len(ids or []), updated_version, msg
+                else:
+                    return selected, ['light'] * len(ids or []), updated_version, f"Must distribute exactly {required} cards (currently {total})"
         return [], ['light'] * len(ids or []), updated_version, ''
         
     elif 'discard' in trig and selected and rid and pid:
@@ -2066,8 +2164,8 @@ def update_play_button(selected, version, rid, pid):
     player = room.players.get(pid)
     if not player or not player.hand:
         return True
-    # If there are pending gifts/discards, keep disabled
-    if room.pending_gift or room.pending_discard:
+    # If there are pending gifts/discards or exchange phase, keep disabled
+    if room.pending_gift or room.pending_discard or room.exchange_phase:
         return True
     # Check if any valid play exists
     hand = player.hand
@@ -2076,7 +2174,8 @@ def update_play_button(selected, version, rid, pid):
         # Any set of same rank is valid (except first play of first game)
         if getattr(room, 'first_game', True) and not getattr(room, 'first_game_first_play_done', False):
             threes = [c for c in hand if parse_card(c)[0] == 3]
-            if threes:
+            jokers = [c for c in hand if parse_card(c)[0] == 'JOKER']
+            if threes or jokers:
                 valid_play_exists = True
         else:
             rank_groups = {}
@@ -2184,23 +2283,41 @@ def update_gift_total(gift_values, rid, pid):
         return html.Div(f"⏳ Need {required - total_gifting} more cards", className='text-warning small fw-bold')
 
 def assign_roles_dynamic(room):
+    """
+    Assign roles based on finished order:
+    - First to finish = President
+    - Second to finish = Vice President  
+    - Third to finish = Scumbag (in 4+ player games)
+    - Last to finish = Asshole
+    """
     n = len(room.players)
+    
+    # Define role order based on number of players
     if n == 3:
         roles = ['President', 'Vice President', 'Asshole']
     elif n == 4:
         roles = ['President', 'Vice President', 'Scumbag', 'Asshole']
     else:
         roles = ['President', 'Vice President', 'Citizen', 'Scumbag', 'Asshole']
+    
+    # Clear current game roles
+    room.current_game_roles.clear()
+    
+    # Assign roles based on finished order
     for i, pid in enumerate(room.finished_order):
         if i < len(roles):
-            room.players[pid].role = roles[i]
+            role = roles[i]
+            room.players[pid].role = role
+            room.current_game_roles[pid] = role
         else:
             room.players[pid].role = None
+            room.current_game_roles[pid] = None
+    
     # For players still in the game, clear their role until they finish
     for pid, p in room.players.items():
         if pid not in room.finished_order:
             p.role = None
-
+            room.current_game_roles[pid] = None
 
 
 
