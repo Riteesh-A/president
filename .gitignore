@@ -42,4 +42,5 @@ __pycache__/
 .env.production.local
 .env.development
 .env.test
-.env.production
+.env.productionnode_modules/
+.next/

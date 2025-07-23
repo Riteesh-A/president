@@ -288,6 +288,8 @@ class PresidentEngine:
                 - str: An error message if the play is invalid, or "Valid play" if it is valid
                 - Optional[dict]: A dictionary containing the rank, count, and effect of the play if it is valid, None otherwise
         """
+        if room.exchange_phase:
+            return True, "Card exchange phase- Validation skipped", None
         player = room.players.get(player_id)
         if not player:
             return False, "Player not found", None
@@ -1988,8 +1990,10 @@ def update_game_and_trigger_bots(n_intervals, rid, pid, selected_cards, last_ver
                 # Human scumbag - trigger automatic exchange
                 best_cards = bot._get_best_cards(scumbag.hand, 1)
                 if best_cards:
+                    print(f"🔍 DEBUG: Human scumbag {scumbag.name} automatically giving {best_cards[0]} to Vice President")
                     engine.submit_scumbag_card(rid, scumbag_id, best_cards[0])
                     # Return early to prevent immediate triggering of next exchange
+                    print(f"🔍 DEBUG: Returning early to prevent automatic Vice President exchange")
                     return create_game_layout(room, pid, selected_cards), room.version
         
         # Manual exchanges (only for bots, humans handle via UI):
@@ -2004,8 +2008,12 @@ def update_game_and_trigger_bots(n_intervals, rid, pid, selected_cards, last_ver
         elif current_exchange == 'vice_to_scumbag' and exchange['vice_president_id'] in room.players:
             vice_president_id = exchange['vice_president_id']
             vice_president = room.players[vice_president_id]
+            print(f"🔍 DEBUG: Vice President exchange detected for {vice_president.name} (is_bot: {vice_president.is_bot})")
             if vice_president.is_bot:
+                print(f"🔍 DEBUG: Triggering automatic exchange for bot Vice President")
                 bot._handle_card_exchange(rid, vice_president_id)
+            else:
+                print(f"🔍 DEBUG: Human Vice President - should show manual UI, not triggering automatic exchange")
     
     # Only update layout if game version changed
     if room.version != last_version:
