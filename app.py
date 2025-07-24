@@ -839,6 +839,9 @@ class PresidentEngine:
         # Set global_asshole_id to the last player in finished_order
         if room.finished_order:
             room.global_asshole_id = room.finished_order[-1]
+        
+        # Increment version to trigger UI update
+        room.version += 1
 
     def _start_card_exchange(self, room: RoomState):
         """Start the card exchange phase between roles"""
@@ -2336,7 +2339,13 @@ def assign_roles_dynamic(room):
         roles = ['President', 'Vice President', 'Citizen', 'Scumbag', 'Asshole']
     
     # Clear current game roles
-    room.current_game_roles.clear()
+    #room.current_game_roles.clear()
+    
+    for pid in room.finished_order:
+        if pid in room.current_game_roles:
+            del room.current_game_roles[pid]
+        if pid in room.players:
+            room.players[pid].role = None
     
     # Assign roles based on finished order
     for i, pid in enumerate(room.finished_order):
