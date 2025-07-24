@@ -37,7 +37,13 @@ class RoomState:
     pending_discard: Optional[dict] = None
     last_play: Optional[dict] = None
     game_log: List[str] = field(default_factory=list)
-    first_game: bool = True
-    last_round_winner: Optional[str] = None
-    first_game_first_play_done: bool = False
-    global_asshole_id: Optional[str] = None 
+    first_game: bool = True # Add this field
+    last_round_winner: Optional[str] = None # Add this field
+    first_game_first_play_done: bool = False # Add this field
+    global_asshole_id: Optional[str] = None # Add this field
+    # Card exchange phase
+    pending_exchange: Optional[dict] = None  # Exchange phase data
+    exchange_phase: bool = False  # Whether we're in exchange phase
+    # Role tracking for current and previous game
+    current_game_roles: Dict[str, str] = field(default_factory=dict)
+    previous_game_roles: Dict[str, str] = field(default_factory=dict) 

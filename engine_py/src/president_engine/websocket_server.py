@@ -110,6 +110,8 @@ class GameWebSocketManager:
                 await self.gift_cards(ws_player_id, message.get('assignments', []))
             elif msg_type == 'discard_select':
                 await self.discard_cards(ws_player_id, message.get('cards', []))
+            elif msg_type == 'exchange_return':
+                await self.exchange_cards(ws_player_id, message.get('cards', []))
             elif msg_type == 'request_state':
                 await self.send_game_state(ws_player_id)
         except Exception as e:
@@ -172,29 +174,10 @@ class GameWebSocketManager:
         game_player_id = self.connection_manager.ws_to_game_player.get(ws_player_id)
         room_id = self.connection_manager.player_to_room.get(ws_player_id)
         
-        print(f"🎮 BACKEND PLAY DEBUG:")
-        print(f"  ws_player_id: {ws_player_id}")
-        print(f"  game_player_id: {game_player_id}")
-        print(f"  room_id: {room_id}")
-        print(f"  card_ids: {card_ids}")
-        
         if not game_player_id or not room_id:
-            print(f"❌ Missing game_player_id or room_id")
             return
             
-        room = self.engine.get_room(room_id)
-        if room:
-            print(f"  current_turn: {room.turn}")
-            print(f"  phase: {room.phase}")
-            print(f"  turn_matches: {room.turn == game_player_id}")
-            print(f"  current_player_hand: {room.players[game_player_id].hand if game_player_id in room.players else 'N/A'}")
-            print(f"  current_rank: {room.current_rank}")
-            print(f"  current_count: {room.current_count}")
-            print(f"  first_game: {getattr(room, 'first_game', 'N/A')}")
-            print(f"  first_game_first_play_done: {getattr(room, 'first_game_first_play_done', 'N/A')}")
-        
         success, message = self.engine.play_cards(room_id, game_player_id, card_ids)
-        print(f"  play_result: success={success}, message='{message}'")
         
         if success:
             await self.broadcast_game_state(room_id)
@@ -256,6 +239,58 @@ class GameWebSocketManager:
             await self.connection_manager.send_personal_message({
                 'type': 'error',
                 'code': 'DISCARD_FAILED',
+                'message': message,
+                'timestamp': int(asyncio.get_event_loop().time() * 1000)
+            }, ws_player_id)
+            
+    async def exchange_cards(self, ws_player_id: str, card_ids: list):
+        game_player_id = self.connection_manager.ws_to_game_player.get(ws_player_id)
+        room_id = self.connection_manager.player_to_room.get(ws_player_id)
+        
+        if not game_player_id or not room_id:
+            return
+            
+        room = self.engine.get_room(room_id)
+        if not room or not room.pending_exchange:
+            await self.connection_manager.send_personal_message({
+                'type': 'error',
+                'code': 'EXCHANGE_FAILED',
+                'message': 'No exchange pending',
+                'timestamp': int(asyncio.get_event_loop().time() * 1000)
+            }, ws_player_id)
+            return
+            
+        # Determine which exchange function to call based on player role
+        player = room.players.get(game_player_id)
+        if not player:
+            return
+            
+        success = False
+        message = ""
+        
+        if player.role == 'President':
+            success, message = self.engine.submit_president_cards(room_id, game_player_id, card_ids)
+        elif player.role == 'Vice President':
+            if len(card_ids) == 1:
+                success, message = self.engine.submit_vice_president_card(room_id, game_player_id, card_ids[0])
+            else:
+                message = "Vice President must submit exactly 1 card"
+        elif player.role == 'Scumbag':
+            if len(card_ids) == 1:
+                success, message = self.engine.submit_scumbag_card(room_id, game_player_id, card_ids[0])
+            else:
+                message = "Scumbag must submit exactly 1 card"
+        elif player.role == 'Asshole':
+            success, message = self.engine.submit_asshole_cards(room_id, game_player_id, card_ids)
+        else:
+            message = "No exchange required for your role"
+            
+        if success:
+            await self.broadcast_game_state(room_id)
+        else:
+            await self.connection_manager.send_personal_message({
+                'type': 'error',
+                'code': 'EXCHANGE_FAILED',
                 'message': message,
                 'timestamp': int(asyncio.get_event_loop().time() * 1000)
             }, ws_player_id)
@@ -331,6 +366,14 @@ class GameWebSocketManager:
                 'original_count': room.pending_discard['remaining']  # Simplified
             }
             
+        # Add exchange phase data
+        exchange_data = None
+        if room.pending_exchange:
+            exchange_data = {
+                'phase': 'exchange',
+                'data': room.pending_exchange.copy()
+            }
+            
         return {
             'id': room.id,
             'version': room.version,
@@ -342,7 +385,8 @@ class GameWebSocketManager:
             'finished_order': room.finished_order.copy(),
             'pending_effects': pending_effects,
             'recent_effects': [],  # We could populate this with recent game log entries
-            'discard': room.discard.copy()
+            'discard': room.discard.copy(),
+            'exchange_data': exchange_data
         }
         
     async def start_bot_automation(self, room_id: str):
@@ -359,11 +403,10 @@ class GameWebSocketManager:
                 room = self.engine.get_room(room_id)
                 if not room or room.phase != 'play':
                     break
-                print(f"[BOT LOOP] Current turn: {room.turn} ({room.players[room.turn].name if room.turn in room.players else 'Unknown'})")
+                    
                 if room.turn and room.turn in room.players:
                     current_player = room.players[room.turn]
                     if current_player.is_bot:
-                        print(f"[BOT LOOP] Bot {current_player.name} ({current_player.id}) is making a move.")
                         # Add small delay for realism
                         await asyncio.sleep(0.8)
                         

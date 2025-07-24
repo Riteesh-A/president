@@ -31,6 +31,20 @@ export interface PendingEffect {
   };
 }
 
+export interface ExchangeData {
+  phase: 'exchange';
+  data: {
+    president_id?: string;
+    vice_president_id?: string;
+    scumbag_id?: string;
+    asshole_id?: string;
+    president_cards?: string[];
+    vice_president_cards?: string[];
+    scumbag_cards?: string[];
+    asshole_cards?: string[];
+  };
+}
+
 export interface EffectLogEntry {
   effect: string;
   version: number;
@@ -60,6 +74,7 @@ export interface GameState {
   pending_effects: PendingEffect;
   recent_effects: EffectLogEntry[];
   discard: string[];
+  exchange_data?: ExchangeData;
   rules?: GameRules;
 }
 

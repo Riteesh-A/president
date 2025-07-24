@@ -529,6 +529,20 @@ class PresidentEngine:
                     room.inversion_active = False
                     room.game_log.append(f"{player.name} played {pattern['count']} 8s - pile cleared!")
                     room.last_round_winner = player_id  # Set last_round_winner
+
+                    # Check if the player who played 8s has cards left in their hand
+                    if len(player.hand) == 0:
+                        room.game_log.append(f"{player.name} completed their hand!")
+                        # Advance turn to next player
+                        self._advance_turn(room)
+                        return True, "Eight reset + Completed hand! New round started"
+                    else:
+                        # Same player starts next round
+                        for p in room.players.values(): p.passed = False
+                        room.version += 1
+                        room.game_log.append(f"{player.name} starts new round after eight reset")
+                        room.last_round_winner = player_id  # Set last_round_winner
+                        return True, "Eight reset! New round started"
                 elif not game_ended:
                     # Only advance turn if game didn't end
                     self._advance_turn(room)
@@ -774,9 +788,23 @@ class PresidentEngine:
                 room.current_count = None
                 room.inversion_active = False
                 if room.last_play:
-                    room.turn = room.last_play['player_id']
-                    room.game_log.append(f"{room.players[room.turn].name} starts new round")
-                    room.last_round_winner = room.last_play['player_id'] # Set last_round_winner
+                    last_player_id = room.last_play['player_id']
+                    last_player = room.players[last_player_id]
+
+                    # Only set turn to last player if they have cards
+                    if len(last_player.hand) > 0:
+                        room.turn = last_player_id
+                        room.game_log.append(f"{last_player.name} starts new round")
+                        room.last_round_winner = last_player_id # Set last_round_winner
+                    else:
+                        # Advance turn to next player
+                        self._advance_turn(room)
+                        if room.turn:
+                            room.game_log.append(f"{room.players[room.turn].name} starts new round")
+                            room.last_round_winner = room.turn # Set last_round_winner
+                        else:
+                            room.game_log.append("No one has cards, starting new round")
+                            room.last_round_winner = None # Set last_round_winner
                 for p in room.players.values(): p.passed = False
                 # Assign roles in case the last player finished by passing
                 assign_roles_dynamic(room)

@@ -541,6 +541,233 @@ class PresidentEngine:
             if pid not in room.finished_order:
                 p.role = None
 
+    def _start_card_exchange(self, room: RoomState):
+        """Start the card exchange phase between games"""
+        room.phase = 'exchange'
+        room.exchange_phase = True
+        room.game_log.append("Card exchange phase started!")
+        
+        # Set up exchange data
+        n = len(room.players)
+        if n == 3:
+            # President gives 2 best cards to Asshole
+            # Asshole gives 2 worst cards to President
+            president_id = room.finished_order[0] if len(room.finished_order) > 0 else None
+            asshole_id = room.finished_order[-1] if len(room.finished_order) > 0 else None
+            
+            if president_id and asshole_id:
+                room.pending_exchange = {
+                    'president_id': president_id,
+                    'asshole_id': asshole_id,
+                    'president_cards': [],
+                    'asshole_cards': []
+                }
+        elif n == 4:
+            # President gives 2 best cards to Asshole
+            # Vice President gives 1 best card to Scumbag
+            # Asshole gives 2 worst cards to President
+            # Scumbag gives 1 worst card to Vice President
+            president_id = room.finished_order[0] if len(room.finished_order) > 0 else None
+            vice_president_id = room.finished_order[1] if len(room.finished_order) > 1 else None
+            scumbag_id = room.finished_order[-2] if len(room.finished_order) > 1 else None
+            asshole_id = room.finished_order[-1] if len(room.finished_order) > 0 else None
+            
+            if president_id and asshole_id and vice_president_id and scumbag_id:
+                room.pending_exchange = {
+                    'president_id': president_id,
+                    'vice_president_id': vice_president_id,
+                    'scumbag_id': scumbag_id,
+                    'asshole_id': asshole_id,
+                    'president_cards': [],
+                    'vice_president_cards': [],
+                    'scumbag_cards': [],
+                    'asshole_cards': []
+                }
+        else:  # 5 players
+            # President gives 2 best cards to Asshole
+            # Vice President gives 1 best card to Scumbag
+            # Asshole gives 2 worst cards to President
+            # Scumbag gives 1 worst card to Vice President
+            president_id = room.finished_order[0] if len(room.finished_order) > 0 else None
+            vice_president_id = room.finished_order[1] if len(room.finished_order) > 1 else None
+            scumbag_id = room.finished_order[-2] if len(room.finished_order) > 1 else None
+            asshole_id = room.finished_order[-1] if len(room.finished_order) > 0 else None
+            
+            if president_id and asshole_id and vice_president_id and scumbag_id:
+                room.pending_exchange = {
+                    'president_id': president_id,
+                    'vice_president_id': vice_president_id,
+                    'scumbag_id': scumbag_id,
+                    'asshole_id': asshole_id,
+                    'president_cards': [],
+                    'vice_president_cards': [],
+                    'scumbag_cards': [],
+                    'asshole_cards': []
+                }
+
+    def submit_asshole_cards(self, room_id: str, asshole_id: str, card_ids: List[str]) -> Tuple[bool, str]:
+        """Submit cards from Asshole to President"""
+        with self.room_locks[room_id]:
+            room = self.get_room(room_id)
+            if not room or not room.pending_exchange:
+                return False, "No exchange pending"
+            
+            player = room.players[asshole_id]
+            if not player:
+                return False, "Player not found"
+            
+            # Validate cards
+            for card_id in card_ids:
+                if card_id not in player.hand:
+                    return False, f"You don't own {card_id}"
+            
+            # Store the cards
+            room.pending_exchange['asshole_cards'] = card_ids.copy()
+            room.game_log.append(f"{player.name} (Asshole) selected {len(card_ids)} cards for President")
+            
+            # Check if exchange is complete
+            if self._is_exchange_complete(room):
+                self._finish_card_exchange(room)
+            
+            room.version += 1
+            return True, "Cards submitted"
+
+    def submit_president_cards(self, room_id: str, president_id: str, card_ids: List[str]) -> Tuple[bool, str]:
+        """Submit cards from President to Asshole"""
+        with self.room_locks[room_id]:
+            room = self.get_room(room_id)
+            if not room or not room.pending_exchange:
+                return False, "No exchange pending"
+            
+            player = room.players[president_id]
+            if not player:
+                return False, "Player not found"
+            
+            # Validate cards
+            for card_id in card_ids:
+                if card_id not in player.hand:
+                    return False, f"You don't own {card_id}"
+            
+            # Store the cards
+            room.pending_exchange['president_cards'] = card_ids.copy()
+            room.game_log.append(f"{player.name} (President) selected {len(card_ids)} cards for Asshole")
+            
+            # Check if exchange is complete
+            if self._is_exchange_complete(room):
+                self._finish_card_exchange(room)
+            
+            room.version += 1
+            return True, "Cards submitted"
+
+    def submit_scumbag_card(self, room_id: str, scumbag_id: str, card_id: str) -> Tuple[bool, str]:
+        """Submit card from Scumbag to Vice President"""
+        with self.room_locks[room_id]:
+            room = self.get_room(room_id)
+            if not room or not room.pending_exchange:
+                return False, "No exchange pending"
+            
+            player = room.players[scumbag_id]
+            if not player:
+                return False, "Player not found"
+            
+            if card_id not in player.hand:
+                return False, f"You don't own {card_id}"
+            
+            room.pending_exchange['scumbag_cards'] = [card_id]
+            room.game_log.append(f"{player.name} (Scumbag) selected 1 card for Vice President")
+            
+            if self._is_exchange_complete(room):
+                self._finish_card_exchange(room)
+            
+            room.version += 1
+            return True, "Card submitted"
+
+    def submit_vice_president_card(self, room_id: str, vice_president_id: str, card_id: str) -> Tuple[bool, str]:
+        """Submit card from Vice President to Scumbag"""
+        with self.room_locks[room_id]:
+            room = self.get_room(room_id)
+            if not room or not room.pending_exchange:
+                return False, "No exchange pending"
+            
+            player = room.players[vice_president_id]
+            if not player:
+                return False, "Player not found"
+            
+            if card_id not in player.hand:
+                return False, f"You don't own {card_id}"
+            
+            room.pending_exchange['vice_president_cards'] = [card_id]
+            room.game_log.append(f"{player.name} (Vice President) selected 1 card for Scumbag")
+            
+            if self._is_exchange_complete(room):
+                self._finish_card_exchange(room)
+            
+            room.version += 1
+            return True, "Card submitted"
+
+    def _is_exchange_complete(self, room: RoomState) -> bool:
+        """Check if all required cards have been submitted for exchange"""
+        if not room.pending_exchange:
+            return False
+        
+        n = len(room.players)
+        if n == 3:
+            return (len(room.pending_exchange.get('president_cards', [])) == 2 and
+                    len(room.pending_exchange.get('asshole_cards', [])) == 2)
+        else:  # 4 or 5 players
+            return (len(room.pending_exchange.get('president_cards', [])) == 2 and
+                    len(room.pending_exchange.get('asshole_cards', [])) == 2 and
+                    len(room.pending_exchange.get('vice_president_cards', [])) == 1 and
+                    len(room.pending_exchange.get('scumbag_cards', [])) == 1)
+
+    def _finish_card_exchange(self, room: RoomState):
+        """Complete the card exchange and start new game"""
+        exchange = room.pending_exchange
+        
+        # Transfer cards
+        if exchange.get('president_cards'):
+            president = room.players[exchange['president_id']]
+            asshole = room.players[exchange['asshole_id']]
+            for card in exchange['president_cards']:
+                president.hand.remove(card)
+                asshole.hand.append(card)
+            president.hand_count = len(president.hand)
+            asshole.hand_count = len(asshole.hand)
+        
+        if exchange.get('asshole_cards'):
+            president = room.players[exchange['president_id']]
+            asshole = room.players[exchange['asshole_id']]
+            for card in exchange['asshole_cards']:
+                asshole.hand.remove(card)
+                president.hand.append(card)
+            president.hand_count = len(president.hand)
+            asshole.hand_count = len(asshole.hand)
+        
+        if exchange.get('vice_president_cards'):
+            vice_president = room.players[exchange['vice_president_id']]
+            scumbag = room.players[exchange['scumbag_id']]
+            for card in exchange['vice_president_cards']:
+                vice_president.hand.remove(card)
+                scumbag.hand.append(card)
+            vice_president.hand_count = len(vice_president.hand)
+            scumbag.hand_count = len(scumbag.hand)
+        
+        if exchange.get('scumbag_cards'):
+            vice_president = room.players[exchange['vice_president_id']]
+            scumbag = room.players[exchange['scumbag_id']]
+            for card in exchange['scumbag_cards']:
+                scumbag.hand.remove(card)
+                vice_president.hand.append(card)
+            vice_president.hand_count = len(vice_president.hand)
+            scumbag.hand_count = len(scumbag.hand)
+        
+        room.game_log.append("Card exchange completed!")
+        room.pending_exchange = None
+        room.exchange_phase = False
+        
+        # Start new game
+        self.start_game(room.id)
+
     def _format_card(self, card_id: str) -> str:
         rank, suit = parse_card(card_id)
         suit_symbols = {'S':'♠','H':'♥','D':'♦','C':'♣'}
