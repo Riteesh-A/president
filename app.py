@@ -689,8 +689,9 @@ class PresidentEngine:
                     self._advance_turn_if_no_pending(room)
                 else:
                     self._advance_turn_if_no_pending(room)
+            
             room.version += 1
-            return True, "Gift distributed successfully"
+            return True, "Gift distribution successful"
 
     def submit_discard_selection(self, room_id: str, player_id: str, card_ids: List[str]) -> Tuple[bool, str]:
         """
@@ -2338,28 +2339,29 @@ def assign_roles_dynamic(room):
     else:
         roles = ['President', 'Vice President', 'Citizen', 'Scumbag', 'Asshole']
     
-    # Clear current game roles
-    #room.current_game_roles.clear()
-    
+    # Clear roles for players who have finished
     for pid in room.finished_order:
         if pid in room.current_game_roles:
             del room.current_game_roles[pid]
         if pid in room.players:
             room.players[pid].role = None
     
-    # Assign roles based on finished order
+    # Assign roles to players who have finished
     for i, pid in enumerate(room.finished_order):
         if i < len(roles):
             role = roles[i]
             room.players[pid].role = role
             room.current_game_roles[pid] = role
-        else:
-            room.players[pid].role = None
-            room.current_game_roles[pid] = None
     
-    # DO NOT clear roles for players still in the game
-    # They should keep their previous roles until they actually finish
-    # Only assign roles to players who have finished
+    # Assign remaining roles to players who haven't finished yet
+    remaining_roles = roles[len(room.finished_order):]
+    players_not_finished = [pid for pid in room.players.keys() if pid not in room.finished_order]
+    
+    for i, pid in enumerate(players_not_finished):
+        if i < len(remaining_roles):
+            role = remaining_roles[i]
+            room.players[pid].role = role
+            room.current_game_roles[pid] = role
 
 
 
